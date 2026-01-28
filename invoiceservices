@@ -1,767 +1,1205 @@
-namespace App.Services.externalApi.talaodenotas.services
+namespace App.Services.Commons
 {
     using System;
-    using System.Collections.Generic;
+    using System.Globalization;
     using System.Linq;
-    using System.Net;
-    using System.Net.Http;
-    using System.Text;
-    using System.Threading.Tasks;
-    using App.Services.externalApi.talaodenotas.entities;
+    using System.Threading;
+    using global::Core.BC.Domain.Entities.business;
     using global::Core.BC.Domain.Entities.invoice;
-    using global::Core.BC.Domain.Entities.invoiceParcel;
-    using Newtonsoft.Json;
-    using Newtonsoft.Json.Linq;
-    using HttpStatusCode = System.Net.HttpStatusCode;
+    using Microsoft.OData.Edm;
+    using IPIModel = Core.BC.Domain.Entities.invoice.IPIModel;
 
-    public class Services
+    public static class Nfe
     {
-        public Error Error { get; set; }
-
-        public externalApi.talaodenotas.entities.HttpStatusCode TnStatusCode { get; set; }
-
-        public Services()
+        public static externalApi.talaodenotas.entities.NfeModel GenerateNfe(InvoiceModel data, string _nNf, bool SN = false)
         {
-            this.TnStatusCode = new entities.HttpStatusCode();
-        }
-
-        public async Task<List<entities.NatureOperationModel>> GetNatureOperation()
-        {
-            var httpClient = new HttpClient();
-            try
+            var _r = new externalApi.talaodenotas.entities.NfeModel();
+            _r.Official = true;
+            // ide
+            _r.InfNfe = new InfNFeModel
             {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/natureOperation");
-                var json = await rsp.Content.ReadAsStringAsync();
-                var _rtn = JsonConvert.DeserializeObject<List<entities.NatureOperationModel>>(JObject.Parse(json)["data"].ToString());
-
-                return _rtn;
-            }
-            catch (Exception ex)
+                Ide = new IdeModel()
+            };
+            _r.InfNfe.Ide.NNF = _nNf;
+            if (data.NatureOperation == null || data.NatureOperation.Length == 0)
+                _r.InfNfe.Ide.NatOp = "VENDA DE MERCADORIA";
+            else
+                _r.InfNfe.Ide.NatOp = data.NatureOperation.ToUpper();
+            _r.InfNfe.Ide.Mod = "55"; // nfe
+            _r.InfNfe.Ide.Serie = data.Order.Business.NfeSerie;
+            if (_r.InfNfe.Ide.NatOp.ToLower().Contains("devolu"))
+                _r.InfNfe.Ide.TpNF = "0"; // entrada
+            else
+                _r.InfNfe.Ide.TpNF = (data.TpNf == null || data.TpNf.Length == 0) ? "1" : data.TpNf; // saida
+            _r.InfNfe.Ide.TpImp = "1";
+            if (data.Order.Business.AddressState.ToUpper() == "SP")
+                _r.InfNfe.Ide.IndSinc = "0";
+            _r.InfNfe.Ide.TpEmis = "1";
+            _r.InfNfe.Ide.CDV = "3";
+            _r.InfNfe.Ide.TpAmb = data.Order.Business.Invoice ? "1" : "2";
+            if (string.IsNullOrEmpty(data.NfeFin))
             {
-                return null;
-            }
-        }
-
-        public async Task<List<entities.TaxSpecialModel>> GetTaxSpecial()
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/taxSpecial");
-                var json = await rsp.Content.ReadAsStringAsync();
-                var _rtn = JsonConvert.DeserializeObject<List<entities.TaxSpecialModel>>(JObject.Parse(json)["data"].ToString());
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<List<entities.CfopModel>> GetCFOP()
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/cfop");
-                var json = await rsp.Content.ReadAsStringAsync();
-                var _rtn = JsonConvert.DeserializeObject<List<entities.CfopModel>>(JObject.Parse(json)["data"].ToString());
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<List<entities.TruckageModel>> GetTruckage()
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/truckage");
-                var json = await rsp.Content.ReadAsStringAsync();
-                var _rtn = JsonConvert.DeserializeObject<List<entities.TruckageModel>>(JObject.Parse(json)["data"].ToString());
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<entities.PersonCertificateModel> SaveCertificate(entities.PersonCertificateModel cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/person/certificate", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<entities.PersonCertificateModel>(json);
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<entities.PersonModel> SavePerson(entities.PersonModel cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/person", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-                var _rtn = JsonConvert.DeserializeObject<entities.PersonModel>(json);
-
-                this.Status(rsp.StatusCode, json);
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<entities.NfeModel> Nfe(entities.NfeModel cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<entities.NfeModel>(json);
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
+                if (_r.InfNfe.Ide.NatOp.ToLower().Contains("devolu"))
+                    _r.InfNfe.Ide.FinNFe = "4";
                 else
+                    _r.InfNfe.Ide.FinNFe = "1";
+            }
+            else
+            {
+                _r.InfNfe.Ide.FinNFe = data.NfeFin;
+            }
+
+            if (!string.IsNullOrEmpty(data.NfeRef))
+            {
+                _r.InfNfe.Ide.NFref = new NFref();
+                _r.InfNfe.Ide.NFref.RefNFe = data.NfeRef;
+            }
+
+            _r.InfNfe.Ide.IndFinal = "1";
+            _r.InfNfe.Ide.IndPres = "1";
+            _r.InfNfe.Ide.ProcEmi = "0";
+            _r.InfNfe.Ide.VerProc = "NDDigital NFe 4.8.3";
+            _r.InfNfe.Ide.IdDest = "1";
+
+            // infAdic
+
+            _r.InfNfe.InfAdic = new Core.BC.Domain.Entities.invoice.InfAdic();
+            if (data.Order != null)
+            {
+                if (data.Order.Description != null)
                 {
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-                    if (this.Error.Errors != null)
+                    _r.InfNfe.InfAdic.InfCpl = data.Order.Description;
+                    _r.InfNfe.InfAdic.InfCpl += " - ";
+
+                }
+            }
+            if (_r.InfNfe.InfAdic.InfCpl != null && _r.InfNfe.InfAdic.InfCpl.Length == 0)
+                _r.InfNfe.InfAdic.InfCpl += " - ";
+            if (SN)
+                _r.InfNfe.InfAdic.InfCpl += "DOCUMENTO EMITIDO POR ME OU EPP OPTANTE PELO SIMPLES NACIONAL, NÃO GERA DIREITO A CRÉDITO FISCAL DE IPI.";
+
+            if (data.Description != null && data.Description.Length > 0)
+                _r.InfNfe.InfAdic.InfCpl += data.Description.Trim();
+
+            if (_r.InfNfe.InfAdic.InfCpl != null)
+                _r.InfNfe.InfAdic.InfCpl = _r.InfNfe.InfAdic.InfCpl.Trim();
+
+            _r.InfNfe.InfAdic.InfCpl = _r.InfNfe.InfAdic.InfCpl?.Replace("’", string.Empty);
+
+            // emit
+            _r.InfNfe.Emit = new EmitModel
+            {
+                CNPJ = data.Order.Business.CnpjCpf,
+                CRT = "1" // Simples Nacional
+            };
+
+            // dest
+            _r.InfNfe.Dest = new DestModel();
+            if (data.Order.Client.CnpjCpf.Length.Equals(11))
+                _r.InfNfe.Dest.CPF = data.Order.Client.CnpjCpf;
+            else
+                _r.InfNfe.Dest.CNPJ = data.Order.Client.CnpjCpf;
+            if (data.Order.Client.Ie != null && data.Order.Client.Ie.Length > 0)
+            {
+
+                _r.InfNfe.Dest.IndIEDest = "1";
+                _r.InfNfe.Dest.IE = data.Order.Client.Ie;
+            }
+            else if ((data.Order.Client.Ie == null || data.Order.Client.Ie == string.Empty || data.Order.Client.TypeContributor == null || data.Order.Client.TypeContributor == string.Empty) && data.Order.Client.TypeContributor != "9")
+            {
+                _r.InfNfe.Dest.IndIEDest = "9";
+            }
+            else
+            {
+                _r.InfNfe.Dest.IndIEDest = data.Order.Client.TypeContributor;
+            }
+
+            _r.InfNfe.Dest.XNome = data.Order.Client.NameCompany;
+            _r.InfNfe.Dest.EnderDest = new EnderDestModel();
+            _r.InfNfe.Dest.EnderDest.XLgr = data.Order.Client.AddressStreet;
+            _r.InfNfe.Dest.EnderDest.Nro = data.Order.Client.AddressNumber;
+            if (data.Order.Client.AddressNote != null && data.Order.Client.AddressNote.Length > 0)
+                _r.InfNfe.Dest.EnderDest.XCpl = data.Order.Client.AddressNote;
+            _r.InfNfe.Dest.EnderDest.XBairro = data.Order.Client.AddressDistrict;
+            _r.InfNfe.Dest.EnderDest.CMun = data.Order.Client.AddressCity;
+            _r.InfNfe.Dest.EnderDest.XMun = data.Order.Client.AddressCity;
+            _r.InfNfe.Dest.EnderDest.UF = data.Order.Client.AddressState;
+            _r.InfNfe.Dest.EnderDest.CEP = data.Order.Client.AddressZipCode;
+            _r.InfNfe.Dest.EnderDest.CPais = "1058";
+            _r.InfNfe.Dest.EnderDest.XPais = "BRASIL";
+            _r.InfNfe.Dest.EnderDest.Fone = data.Order.Client.Phone1;
+
+            // retirada
+            _r.InfNfe.Retirada = new RetiradaModel();
+            if (data.Order.Business.CnpjCpf.Length.Equals(11))
+                _r.InfNfe.Retirada.CPF = data.Order.Business.CnpjCpf;
+            else
+                _r.InfNfe.Retirada.CNPJ = data.Order.Business.CnpjCpf;
+            _r.InfNfe.Retirada.XLgr = data.Order.Business.AddressStreet;
+            _r.InfNfe.Retirada.Nro = data.Order.Business.AddressNumber;
+            _r.InfNfe.Retirada.XBairro = data.Order.Business.AddressDistrict;
+            _r.InfNfe.Retirada.CMun = data.Order.Business.AddressCity;
+            _r.InfNfe.Retirada.XMun = data.Order.Business.AddressCity;
+            _r.InfNfe.Retirada.UF = data.Order.Business.AddressState;
+
+            // entrega
+            _r.InfNfe.Entrega = new EntregaModel();
+            if (data.Order.Client.CnpjCpf.Length.Equals(11))
+                _r.InfNfe.Entrega.CPF = data.Order.Client.CnpjCpf;
+            else
+                _r.InfNfe.Entrega.CNPJ = data.Order.Client.CnpjCpf;
+            _r.InfNfe.Entrega.XLgr = data.Order.Client.AddressStreet;
+            _r.InfNfe.Entrega.Nro = data.Order.Client.AddressNumber;
+            _r.InfNfe.Entrega.XBairro = data.Order.Client.AddressDistrict;
+            _r.InfNfe.Entrega.CMun = data.Order.Client.AddressCity;
+            _r.InfNfe.Entrega.XMun = data.Order.Client.AddressCity;
+            _r.InfNfe.Entrega.UF = data.Order.Client.AddressState;
+
+            var _total = 0.00;
+            var _desc = 0.00;
+            var _voutro = 0.00;
+            var _vbc = 0.00;
+            var _vicms = 0.00;
+            var _vipi = 0.00;
+            var _vpis = 0.00;
+            var _vcofins = 0.00;
+            var _vFrete = 0.00;
+
+            //det
+            _r.InfNfe.Det = new System.Collections.Generic.List<DetModel>();
+            foreach (var item in data.Order.OrderProducts.Where(x => x.ProductType.Equals(1)))
+            {
+
+                var _prod = new ProdModel();
+                _prod.CProd = item.Product.Code.ToString();
+                _prod.CEAN = Ean(item.Product.BarCode);
+                _prod.XProd = item.ProductName.ToUpper();
+                _prod.NCM = item.Product.NcmName;
+                _prod.CEST = item.NcmState.Cest;
+                _prod.IndEscala = null;
+                if (item.Product.CBENEF != null && item.Product.CBENEF.Length > 0)
+                    _prod.CBenef = item.Product.CBENEF;
+                else
+                    _prod.CBenef = null;
+                _prod.CFOP = item.Cfop;
+                _prod.UCom = item.Product.Unity == null ? string.Empty : item.Product.Unity.ToUpper();
+                _voutro += (double)decimal.Round(item.OtherValue, 2, MidpointRounding.AwayFromZero);
+
+                _vFrete += Convert.ToDouble(item.ShippingValue);
+                if (item.OtherValue > 0)
+                    _prod.VOutro = Convert.ToDouble(item.OtherValue);
+
+                if (item.ShippingValue > 0)
+                    _prod.VFrete = Convert.ToDouble(item.ShippingValue);
+                _prod.QCom = decimal.ToDouble(item.Quantity);
+                _prod.VUnCom = (double)decimal.Round(item.ProductPrice, 2, MidpointRounding.AwayFromZero);
+
+                if (item.ProductDiscount > 0)
+                {
+                    decimal localDesc = 0;
+                    if (item.ProductDiscountPercentual)
                     {
-                        if (this.Error.Errors.Title == null)
-                            this.Error.Errors.Title = new List<string>() { "Erro não especificado na api de notas." };
+                        localDesc = ((decimal)_prod.VUnCom * (item.ProductDiscount / 100) * item.Quantity);
+                        localDesc = decimal.Round(localDesc, 2, MidpointRounding.AwayFromZero);
+                    }
+                    else
+                    {
+                        localDesc = decimal.Round(item.ProductDiscount * item.Quantity, 2, MidpointRounding.AwayFromZero);
+                    }
+                    Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
+                    _prod.VDesc = localDesc.ToString();
+
+                    _desc += (double)decimal.Round(localDesc, 2, MidpointRounding.AwayFromZero);
+                }
+                _prod.VProd = _prod.VUnCom * (double)item.Quantity;
+                _total += _prod.VProd;
+                _prod.CEANTrib = Ean(item.Product.BarCode);
+                _prod.UTrib = _prod.UCom;
+                _prod.QTrib = _prod.QCom;
+                _prod.VUnTrib = _prod.VUnCom;
+                _prod.IndTot = "1";
+
+                if (item.Product.CProdANP != null && item.Product.CProdANP.Length > 0)
+                {
+                    _prod.Comb = new CombModel();
+                    _prod.Comb.CProdANP = item.Product.CProdANP?.ToUpper();
+                    _prod.Comb.DescANP = item.Product.DescANP?.ToUpper();
+                    _prod.Comb.UFCons = item.Product.UFCons?.ToUpper();
+                }
+
+                var _imposto = new ImpostoModel();
+
+                _imposto.VTotTrib = 0;
+
+                _imposto.ICMS = new ICMSModel();
+
+                if (data.Order.Business.TaxationType == "SN" || data.Order.Business.TaxationType == "MEI")
+                {
+
+                    // if (item.ncmState.csosn == "900")
+                    // {
+                    //     _imposto.ICMS.ICMSSN900 = new ICMSSN900Model();
+                    //     _imposto.ICMS.ICMSSN900.orig = "2";
+                    //     _imposto.ICMS.ICMSSN900.CSOSN = "900";
+                    //     _imposto.ICMS.ICMSSN900.modBC = "3";
+                    //     _imposto.ICMS.ICMSSN900.vBC = 755.27;
+                    //     _imposto.ICMS.ICMSSN900.vICMS = 90.63;
+                    // }
+
+                    if (_r.InfNfe.Dest.IndIEDest == "9" && data.Order.Client.AddressState.ToLower() == "go" && item.NcmState.Csosn != "500")
+                    {
+                        // if (item.ncmState.csosn == "102")
+                        // {
+                        _imposto.ICMS.ICMSSN102 = new ICMSSN102Model();
+                        _imposto.ICMS.ICMSSN102.Orig = "0";
+                        _imposto.ICMS.ICMSSN102.CSOSN = "102";
+                        // }
+                    }
+                    else
+                    {
+
+                        if (item.NcmState.Csosn == "101")
+                        {
+                            _imposto.ICMS.ICMSSN101 = new ICMSSN101Model();
+                            _imposto.ICMS.ICMSSN101.Orig = "0";
+                            _imposto.ICMS.ICMSSN101.CSOSN = "101";
+                            _imposto.ICMS.ICMSSN101.PCredSN = 0;
+                            _imposto.ICMS.ICMSSN101.VCredICMSSN = 0;
+                        }
+                        else if (item.NcmState.Csosn == "102")
+                        {
+                            _imposto.ICMS.ICMSSN102 = new ICMSSN102Model();
+                            _imposto.ICMS.ICMSSN102.Orig = "0";
+                            _imposto.ICMS.ICMSSN102.CSOSN = "102";
+                        }
+                        else if (item.NcmState.Csosn == "103")
+                        {
+                            _imposto.ICMS.ICMSSN102 = new ICMSSN102Model();
+                            _imposto.ICMS.ICMSSN102.Orig = "0";
+                            _imposto.ICMS.ICMSSN102.CSOSN = "103";
+                        }
+                        else if (item.NcmState.Csosn == "400")
+                        {
+                            _imposto.ICMS.ICMSSN400 = new ICMSSN400Model();
+                            _imposto.ICMS.ICMSSN400.Orig = "0";
+                            _imposto.ICMS.ICMSSN400.CSOSN = "400";
+                        }
+                        else if (item.NcmState.Csosn == "900")
+                        {
+
+                            _imposto.ICMS.ICMSSN900 = new ICMSSN900Model();
+                            _imposto.ICMS.ICMSSN900.Orig = "0";
+                            _imposto.ICMS.ICMSSN900.CSOSN = "900"; //item.ncmState.csosn;
+
+                            _imposto.ICMS.ICMSSN900.ModBCST = null;
+                            _imposto.ICMS.ICMSSN900.VBCST = 0;
+                            _imposto.ICMS.ICMSSN900.PICMSST = 0;
+                            _imposto.ICMS.ICMSSN900.VICMSST = 0.00;
+
+                            _imposto.ICMS.ICMSSN900.ModBC = "3";
+                            if (item.NcmState.Icms == 0)
+                            {
+                                _imposto.ICMS.ICMSSN900.VBC = 0.00;
+                                _imposto.ICMS.ICMSSN900.PICMS = 0;
+                                _imposto.ICMS.ICMSSN900.VICMS = 0;
+                            }
+                            else
+                            {
+                                _imposto.ICMS.ICMSSN900.VBC = _prod.VProd;
+                                _imposto.ICMS.ICMSSN900.PICMS = Decimal.ToDouble(item.NcmState.Icms);
+                                _imposto.ICMS.ICMSSN900.VICMS = _imposto.ICMS.ICMSSN900.VBC * (_imposto.ICMS.ICMSSN900.PICMS / 100);
+                                _vbc += _imposto.ICMS.ICMSSN900.VBC.Value;
+                                _vicms += _imposto.ICMS.ICMSSN900.VICMS.Value;
+                            }
+                        }
                         else
-                            this.Error.Errors.Title = new List<string>() { this.Error.Errors.Title.FirstOrDefault() };
+                        {
+                            _imposto.ICMS.ICMSSN500 = new ICMSSN500Model();
+                            _imposto.ICMS.ICMSSN500.Orig = "0";
+                            _imposto.ICMS.ICMSSN500.CSOSN = "500"; //item.ncmState.csosn;
+                            _imposto.ICMS.ICMSSN500.VBCSTRet = 0;//decimal.ToDouble(item.Quantity * item.ProductPrice);
+                            _imposto.ICMS.ICMSSN500.PST = 0;//decimal.ToDouble(item.Quantity * item.ProductPrice);
+                            _imposto.ICMS.ICMSSN500.VICMSSubstituto = 0.00;
+                            _imposto.ICMS.ICMSSN500.VICMSSTRet = 0.00;
+
+                            if (item.NcmState.Icms == 0)
+                            {
+                                _imposto.ICMS.ICMSSN500.VBC = 0.00;
+                                _imposto.ICMS.ICMSSN500.PICMS = 0;
+                                _imposto.ICMS.ICMSSN500.VICMS = 0;
+                            }
+                            else
+                            {
+                                _imposto.ICMS.ICMSSN500.VBC = _prod.VProd;
+                                _imposto.ICMS.ICMSSN500.PICMS = Decimal.ToDouble(item.NcmState.Icms);
+                                _imposto.ICMS.ICMSSN500.VICMS = _imposto.ICMS.ICMSSN500.VBC * (_imposto.ICMS.ICMSSN500.PICMS / 100);
+                                _vbc += _imposto.ICMS.ICMSSN500.VBC;
+                                _vicms += _imposto.ICMS.ICMSSN500.VICMS;
+                            }
+                        }
+
+                    }
+
+                    if (item.NcmState.Csosn == "500")
+                    {
+                        _imposto.IPI = new IPIModel();
+                        _imposto.IPI.CEnq = "999";
+                        _imposto.IPI.IPINT = new Core.BC.Domain.Entities.invoice.IPITribModel();
+                        _imposto.IPI.IPINT.CST = "51";
+                        _imposto.PIS = new PISModel();
+                        _imposto.PIS.PISNT = new PISAliqModel();
+                        if (item.NcmState.Mono)
+                            _imposto.PIS.PISNT.CST = "04";
+                        else
+                            _imposto.PIS.PISNT.CST = "07";
+                        _imposto.COFINS = new COFINSModel();
+                        _imposto.COFINS.COFINSNT = new COFINSAliqModel();
+                        if (item.NcmState.Mono)
+                            _imposto.COFINS.COFINSNT.CST = "04";
+                        else
+                            _imposto.COFINS.COFINSNT.CST = "07";
                     }
                     else
-                        this.Error.Errors = new Errors() { Title = new List<string>() { "Erro não especificado na api de notas." } };
+                    {
+                        _imposto.PIS = new PISModel();
+                        _imposto.PIS.PISNT = new PISAliqModel();
+                        if (item.NcmState.Mono)
+                            _imposto.PIS.PISNT.CST = "04";
+                        else
+                            _imposto.PIS.PISNT.CST = "07";
+                        _imposto.COFINS = new COFINSModel();
+                        _imposto.COFINS.COFINSNT = new COFINSAliqModel();
+                        if (item.NcmState.Mono)
+                            _imposto.COFINS.COFINSNT.CST = "04";
+                        else
+                            _imposto.COFINS.COFINSNT.CST = "07";
+                    }
+
                 }
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<entities.NfeNumberDisable> NfeNumberDisable(entities.NfeNumberDisable cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfeNumberDisable", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<entities.NfeNumberDisable>(json);
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
                 else
                 {
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-                    if (this.Error.Errors != null)
+                    _r.InfNfe.Emit.CRT = "3";
+
+                    if (item.NcmState.Csosn == "00")
                     {
-                        if (this.Error.Errors.Title == null)
-                            this.Error.Errors.Title = new List<string>() { "Erro não especificado na api de notas." };
+                        _imposto.ICMS.ICMS00 = new ICMSCSTModel();
+                        _imposto.ICMS.ICMS00.Orig = item.NcmState.IcmsOrigem;
+                        _imposto.ICMS.ICMS00.CST = "00";
+                        _imposto.ICMS.ICMS00.ModBC = item.NcmState.IcmsModBC;
+
+                        _imposto.ICMS.ICMS00.VBC = _prod.VProd;
+
+                        if (_prod.VDesc != null && _prod.VDesc.Length > 0)
+                            _imposto.ICMS.ICMS00.VBC += -double.Parse(_prod.VDesc);
+                        _imposto.ICMS.ICMS00.PICMS = Convert.ToDouble(item.NcmState.Icms);
+                        _imposto.ICMS.ICMS00.VICMS = RoundUp((_imposto.ICMS.ICMS00.VBC * (_imposto.ICMS.ICMS00.PICMS / 100)).Value, 2);
+
+                        _vbc += _imposto.ICMS.ICMS00.VBC.Value;
+                        _vicms += _imposto.ICMS.ICMS00.VICMS.Value;
                     }
-                    else
-                        this.Error.Errors = new Errors() { Title = new List<string>() { "Erro não especificado na api de notas." } };
+                    else if (item.NcmState.Csosn == "40")
+                    {
+                        _imposto.ICMS.ICMS40 = new ICMSCSTModel();
+                        _imposto.ICMS.ICMS40.Orig = item.NcmState.IcmsOrigem;
+                        _imposto.ICMS.ICMS40.CST = "40";
+                    }
+                    else if (item.NcmState.Csosn == "60")
+                    {
+                        _imposto.ICMS.ICMS60 = new ICMSCSTModel();
+                        _imposto.ICMS.ICMS60.Orig = item.NcmState.IcmsOrigem;
+                        _imposto.ICMS.ICMS60.CST = "60";
+                    }
+                    else if (item.NcmState.Csosn == "20")
+                    {
+                        _imposto.ICMS.ICMS20 = new ICMSCSTModel();
+                        _imposto.ICMS.ICMS20.Orig = item.NcmState.IcmsOrigem;
+                        _imposto.ICMS.ICMS20.CST = "20";
+                        // _imposto.ICMS.ICMS20.pRedBC = "20";
+                        _imposto.ICMS.ICMS20.ModBC = item.NcmState.IcmsModBC;
+                        _imposto.ICMS.ICMS20.VBC = _prod.VProd;
+                        _imposto.ICMS.ICMS20.PICMS = Convert.ToDouble(item.NcmState.Icms);
+                        _imposto.ICMS.ICMS20.VICMS = RoundUp((_imposto.ICMS.ICMS20.VBC * (_imposto.ICMS.ICMS20.PICMS / 100)).Value, 2);
+                        _vbc += _imposto.ICMS.ICMS20.VBC.Value;
+                        _vicms += _imposto.ICMS.ICMS20.VICMS.Value;
+                    }
+                    else if (item.NcmState.Csosn == "51")
+                    {
+                        _imposto.ICMS.ICMS51 = new ICMS51Model();
+                        _imposto.ICMS.ICMS51.Orig = item.NcmState.IcmsOrigem;
+                        _imposto.ICMS.ICMS51.CST = "51";
+                    }
+                    else if (item.NcmState.Csosn == "90")
+                    {
+                        _imposto.ICMS.ICMS90 = new ICMSCSTModel();
+                        _imposto.ICMS.ICMS90.Orig = item.NcmState.IcmsOrigem;
+                        _imposto.ICMS.ICMS90.CST = "90";
+                    }
+
+                    if (item.NcmState.IpiCST == "51")
+                    {
+                        _imposto.IPI = new IPIModel();
+                        _imposto.IPI.CEnq = "999";
+                        _imposto.IPI.IPINT = new Core.BC.Domain.Entities.invoice.IPITribModel();
+                        _imposto.IPI.IPINT.CST = "51";
+                    }
+
+                    _imposto.PIS = new PISModel();
+                    _imposto.PIS.PISAliq = new PISAliqModel();
+                    _imposto.PIS.PISAliq.CST = item.NcmState.PisCST;
+                    _imposto.PIS.PISAliq.VBC = _prod.VProd;
+                    _imposto.PIS.PISAliq.PPIS = Convert.ToDouble(item.NcmState.Pis);
+                    _imposto.PIS.PISAliq.VPIS = Convert.ToDouble(Math.Round(Convert.ToDecimal(_imposto.PIS.PISAliq.VBC * (_imposto.PIS.PISAliq.PPIS / 100)), 2));
+                    _vpis += _imposto.PIS.PISAliq.VPIS.Value;
+
+                    _imposto.COFINS = new COFINSModel();
+
+                    _imposto.COFINS.COFINSAliq = new COFINSAliqModel();
+                    _imposto.COFINS.COFINSAliq.CST = item.NcmState.CofinsCST;
+                    _imposto.COFINS.COFINSAliq.VBC = _prod.VProd;
+                    _imposto.COFINS.COFINSAliq.PCOFINS = Convert.ToDouble(item.NcmState.Cofins);
+                    _imposto.COFINS.COFINSAliq.VCOFINS = Convert.ToDouble(Math.Round(Convert.ToDecimal(_imposto.COFINS.COFINSAliq.VBC * (_imposto.COFINS.COFINSAliq.PCOFINS / 100)), 2));
+                    _vcofins += _imposto.COFINS.COFINSAliq.VCOFINS.Value;
+
+                    if (data.Order.Business.AddressState.ToLower() != data.Order.Client.AddressState.ToLower())
+                    {
+                        _imposto.ICMSUFDest = new ICMSCSTModel();
+                        _imposto.ICMSUFDest.VBCUFDest = 0;
+                        _imposto.ICMSUFDest.VBCFCPUFDest = 0;
+                        _imposto.ICMSUFDest.PFCPUFDest = 0;
+                        _imposto.ICMSUFDest.PICMSUFDest = 0;
+                        _imposto.ICMSUFDest.PICMSInter = Convert.ToDouble(item.NcmState.Icms);
+                        _imposto.ICMSUFDest.PICMSInterPart = 100;
+                        _imposto.ICMSUFDest.VFCPUFDest = 0;
+                        _imposto.ICMSUFDest.VICMSUFDest = 0;
+                        _imposto.ICMSUFDest.VICMSUFRemet = 0;
+                    }
+
+                    if (_r.InfNfe.Emit.CRT != "3")
+                    {
+                        _imposto.PIS = new PISModel();
+                        _imposto.PIS.PISNT = new PISAliqModel();
+                        if (item.NcmState.Mono)
+                            _imposto.PIS.PISNT.CST = "04";
+                        else
+                            _imposto.PIS.PISNT.CST = "07";
+                        _imposto.COFINS = new COFINSModel();
+                        _imposto.COFINS.COFINSNT = new COFINSAliqModel();
+                        if (item.NcmState.Mono)
+                            _imposto.COFINS.COFINSNT.CST = "04";
+                        else
+                            _imposto.COFINS.COFINSNT.CST = "07";
+                    }
                 }
 
-                return null;
+                _r.InfNfe.Det.Add(new DetModel
+                {
+                    Prod = _prod,
+                    Imposto = _imposto,
+                    InfAdProd = item.InfAdProd
+                });
             }
-            catch (Exception ex)
+
+            if (data.Order.Business.TaxationType == "MEI")
             {
-                return null;
+                _r.InfNfe.Emit.CRT = "4";
             }
+
+            //total
+            _r.InfNfe.Total = new TotalModel();
+            _r.InfNfe.Total.ICMSTot = new ICMSTotModel();
+            _r.InfNfe.Total.ICMSTot.VBC = _vbc;
+            _r.InfNfe.Total.ICMSTot.VICMS = _vicms;
+            _r.InfNfe.Total.ICMSTot.VICMSDeson = 0;
+            _r.InfNfe.Total.ICMSTot.VFCPUFDest = 0;
+            _r.InfNfe.Total.ICMSTot.VICMSUFDest = 0;
+            _r.InfNfe.Total.ICMSTot.VICMSUFRemet = 0;
+            _r.InfNfe.Total.ICMSTot.VFCP = 0;
+            _r.InfNfe.Total.ICMSTot.VBCST = 0;
+            _r.InfNfe.Total.ICMSTot.VST = 0;
+            _r.InfNfe.Total.ICMSTot.VFCPST = 0;
+            _r.InfNfe.Total.ICMSTot.VFCPSTRet = 0;
+            _r.InfNfe.Total.ICMSTot.VProd = _total;
+            _r.InfNfe.Total.ICMSTot.VFrete = _vFrete;
+            _r.InfNfe.Total.ICMSTot.VSeg = 0;
+            _r.InfNfe.Total.ICMSTot.VDesc = _desc;
+            _r.InfNfe.Total.ICMSTot.VII = 0;
+            _r.InfNfe.Total.ICMSTot.VIPI = _vipi;
+            _r.InfNfe.Total.ICMSTot.VIPIDevol = 0;
+            _r.InfNfe.Total.ICMSTot.VPIS = _vpis;
+            _r.InfNfe.Total.ICMSTot.VCOFINS = _vcofins;
+            _r.InfNfe.Total.ICMSTot.VOutro = _voutro;
+            _r.InfNfe.Total.ICMSTot.VNF = _total + _vFrete + _voutro - _desc;
+            _r.InfNfe.Total.ICMSTot.VTotTrib = 0;
+
+            if (data.Order.Client.RetentionPIS > 0
+                   && data.Order.Client.RetentionCSLL > 0
+                   && data.Order.Client.RetentionIR > 0
+                   && data.Order.Client.RetentionCOFINS > 0
+                   )
+            {
+                _r.InfNfe.Total.RetTrib = new RetTribModel();
+                _r.InfNfe.Total.RetTrib.VRetPIS = Convert.ToDouble(data.Order.Client.RetentionPIS) / 100 * _r.InfNfe.Total.ICMSTot.VNF;
+                _r.InfNfe.Total.RetTrib.VRetCOFINS = Convert.ToDouble(data.Order.Client.RetentionCOFINS) / 100 * _r.InfNfe.Total.ICMSTot.VNF;
+                _r.InfNfe.Total.RetTrib.VRetCSLL = Convert.ToDouble(data.Order.Client.RetentionCSLL) / 100 * _r.InfNfe.Total.ICMSTot.VNF;
+                _r.InfNfe.Total.RetTrib.VBCIRRF = _r.InfNfe.Total.ICMSTot.VNF;
+                _r.InfNfe.Total.RetTrib.VIRRF = Convert.ToDouble(data.Order.Client.RetentionIR) / 100 * _r.InfNfe.Total.ICMSTot.VNF;
+            }
+
+            // transporte
+            _r.InfNfe.Transp = new TranspModel();
+
+            _r.InfNfe.Transp.ModFrete = data.ModFrete;
+            _r.InfNfe.Transp.Vol = new VolModel();
+            _r.InfNfe.Transp.Vol.QVol = data.NVol;
+            _r.InfNfe.Transp.Vol.Esp = data.NetWeight;
+            _r.InfNfe.Transp.Vol.PesoL = data.NetWeight;
+            _r.InfNfe.Transp.Vol.PesoB = data.GrossWeight;
+
+            if (data.TruckageName != null && data.TruckageName.Length > 0)
+            {
+                _r.InfNfe.Transp.Transporta = new TransportaModel();
+                _r.InfNfe.Transp.Transporta.CNPJ = data.TruckageCnpjCpf.ToUpper();
+                _r.InfNfe.Transp.Transporta.IE = data.TruckageIe?.ToUpper();
+                _r.InfNfe.Transp.Transporta.UF = data.TruckageAddressState?.ToUpper();
+                _r.InfNfe.Transp.Transporta.XMun = data.TruckageAddressCity?.ToUpper();
+                _r.InfNfe.Transp.Transporta.XNome = data.TruckageName?.ToUpper();
+                _r.InfNfe.Transp.Transporta.XEnder = data.TruckageAddress?.ToUpper();
+            }
+            else
+                _r.InfNfe.Transp.Transporta = null;
+
+            _r.InfNfe.Cobr = new Core.BC.Domain.Entities.invoice.CobrModel();
+            _r.InfNfe.Cobr.Fat = new Core.BC.Domain.Entities.invoice.Fat();
+            _r.InfNfe.Cobr.Dup = new System.Collections.Generic.List<Core.BC.Domain.Entities.invoice.Dup>();
+            _r.InfNfe.Cobr.Fat.NFat = _r.InfNfe.Ide.NNF;
+            _r.InfNfe.Cobr.Fat.VOrig = _r.InfNfe.Total.ICMSTot.VNF;
+            _r.InfNfe.Cobr.Fat.VDesc = 0;
+            _r.InfNfe.Cobr.Fat.VLiq = _r.InfNfe.Total.ICMSTot.VNF;
+
+            decimal _totalNF = 0;
+            if (data.NatureOperation == null || (data.NatureOperation.Split('-').FirstOrDefault() != "1202" && data.NatureOperation.Split('-').FirstOrDefault() != "1411"))
+            {
+                var _i = 1;
+
+                var _parcels = data.InvoiceParcels.Where(x => x.From == "nfe").Count();
+
+                if (_parcels > 0)
+                {
+                    if (_parcels == 1 && data.InvoiceParcels.Where(x => x.From == "nfe").FirstOrDefault().Deadline.Date <= DateTime.Now.Date)
+                    {
+
+                    }
+                    else
+                    {
+                        foreach (var item in data.InvoiceParcels.Where(x => x.From == "nfe").OrderBy(x => x.Deadline))
+                        {
+                            _totalNF += item.Value;
+                            if (Decimal.ToDouble(item.Value) > _r.InfNfe.Total.ICMSTot.VNF)
+                                item.Value = (decimal)_r.InfNfe.Total.ICMSTot.VNF;
+                            _r.InfNfe.Cobr.Dup.Add(new Core.BC.Domain.Entities.invoice.Dup
+                            {
+                                DVenc = item.Deadline.Date < DateTime.Now.Date ? DateTime.Now.Date : item.Deadline,
+                                VDup = decimal.ToDouble(item.Value),
+                                NDup = _i.ToString("000")
+                            }); ;
+                            _i++;
+                        }
+                    }
+                }
+            }
+
+            // pagamento
+            _r.InfNfe.Pag = new PagModel();
+            //_r.infNfe.pag.vTroco = 0;
+            _r.InfNfe.Pag.DetPag = new System.Collections.Generic.List<DetPagModel>();
+
+            if (data.NatureOperation == null
+                || (!data.NatureOperation.Split('-').FirstOrDefault().Contains("1202") && data.NatureOperation.Split('-').FirstOrDefault() != "1411"))
+            {
+                _r.InfNfe.Pag.DetPag.Add(new DetPagModel()
+                {
+                    IndPag = "1",
+                    TPag = "99",
+                    XPag = "Pagamento direto",
+                    VPag = Convert.ToDecimal(_r.InfNfe.Total.ICMSTot.VNF)
+                });
+            }
+            else
+            {
+                _r.InfNfe.Pag.DetPag.Add(new DetPagModel()
+                {
+                    IndPag = null,
+                    TPag = "90",
+                    XPag = null,
+                    VPag = 0
+                });
+            }
+
+            return _r;
         }
 
-        public async Task<ReceiptModel> Receipt(ReceiptModel cmd)
+        public static externalApi.talaodenotas.entities.NfeModel GenerateNfce(InvoiceModel data,
+                                        string _nNf,
+                                        BusinessModel _business,
+                                        string _cpf,
+                                        string _name)
         {
-            var httpClient = new HttpClient();
-            try
+            var _r = new externalApi.talaodenotas.entities.NfeModel();
+            _r.Official = data.Official;
+            // ide
+            _r.InfNfe = new InfNFeModel();
+            _r.InfNfe.Ide = new IdeModel();
+            _r.InfNfe.Ide.NNF = _nNf;
+            if (data.NatureOperation == null || data.NatureOperation.Length == 0)
+                _r.InfNfe.Ide.NatOp = "VENDA DE MERCADORIA";
+            else
+                _r.InfNfe.Ide.NatOp = data.NatureOperation.Split('-').LastOrDefault().ToUpper();
+            _r.InfNfe.Ide.Mod = "65"; // nfce
+            _r.InfNfe.Ide.Serie = _business.NfceSerie;
+            _r.InfNfe.Ide.TpNF = "1";
+            _r.InfNfe.Ide.TpImp = "1";
+            // _r.infNfe.ide.indSinc = "1";
+            _r.InfNfe.Ide.TpEmis = "1";
+            _r.InfNfe.Ide.CDV = "3";
+            _r.InfNfe.Ide.TpAmb = _business.Invoice ? "1" : "2";
+            _r.InfNfe.Ide.FinNFe = "1";
+            _r.InfNfe.Ide.IndFinal = "1";
+            _r.InfNfe.Ide.IndPres = "1";
+            _r.InfNfe.Ide.ProcEmi = "0";
+            _r.InfNfe.Ide.VerProc = "NDDigital NFe 4.8.3";
+            _r.InfNfe.Ide.IdDest = "1";
+
+            // infAdic
+
+            _r.InfNfe.InfAdic = new Core.BC.Domain.Entities.invoice.InfAdic();
+            if (data.Order != null)
             {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/invoicereceipt", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<ReceiptModel>(json);
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
-                else
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-
-                return null;
+                if (data.Order.Description != null)
+                {
+                    _r.InfNfe.InfAdic.InfCpl = data.Order.Description;
+                    _r.InfNfe.InfAdic.InfCpl += " - ";
+                }
             }
-            catch (Exception ex)
+            if (data.Description != null && data.Description.Length > 0)
+                _r.InfNfe.InfAdic.InfCpl += data.Description.Trim();
+
+            if (_r.InfNfe.InfAdic.InfCpl != null)
+                _r.InfNfe.InfAdic.InfCpl = _r.InfNfe.InfAdic.InfCpl.Trim();
+
+            // emit
+            _r.InfNfe.Emit = new EmitModel();
+            _r.InfNfe.Emit.CNPJ = _business.CnpjCpf;
+            _r.InfNfe.Emit.CRT = "1"; // Simples Nacional
+
+            // dest
+            _r.InfNfe.Dest = null;
+            if (_cpf != string.Empty)
             {
-                return null;
-            }
-        }
-
-        public async Task<entities.NfseModel> Nfse(entities.NfseModel cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<entities.NfseModel>(json);
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
-                else
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<StatusModel> NfeStatus(Guid cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/status/{cmd}");
-                var json = await rsp.Content.ReadAsStringAsync();
-                var _rtn = JsonConvert.DeserializeObject<StatusModel>(json);
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<StatusModel> NfseStatus(Guid cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/status/{cmd}");
-                var json = await rsp.Content.ReadAsStringAsync();
-                var _rtn = JsonConvert.DeserializeObject<StatusModel>(json);
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<bool> NfseRPS(Guid cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/rps/{cmd}");
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                return false;
-            }
-        }
-
-        public async Task<entities.NfeModel> GetNfeUid(Guid cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/{cmd}");
-                var json = await rsp.Content.ReadAsStringAsync();
-                var _rtn = JsonConvert.DeserializeObject<entities.NfeModel>(json);
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<List<entities.NfseModel>> GetNfSeUid(Guid cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/{cmd}");
-                var json = await rsp.Content.ReadAsStringAsync();
-                var _rtn = JsonConvert.DeserializeObject<List<entities.NfseModel>>(JObject.Parse(json)["data"].ToString());
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<string> ReadXml(entities.File cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/readxml", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return json;
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<bool> NfeEvento(entities.EventoCommand cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfeevent/create", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<bool>(json);
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
-                else
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-
-                return false;
-            }
-            catch (Exception ex)
-            {
-                return false;
-            }
-        }
-
-        public async Task<bool> NfceEvento(Guid uid)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/eventonfce/" + uid);
-
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<bool>(json);
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
-                else
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-
-                return false;
-            }
-            catch (Exception ex)
-            {
-                return false;
-            }
-        }
-
-        public async Task<bool> NfseEvento(entities.NfseEventoModel cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/evento", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<bool>(json);
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
-                else
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-
-                return false;
-            }
-            catch (Exception ex)
-            {
-                return false;
-            }
-        }
-
-        public async Task<NfseEventEntity> NfseEvent(entities.NfseEventEntity cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfseevent", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<bool>(json);
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return JsonConvert.DeserializeObject<entities.NfseEventEntity>(json);
+                if (_cpf != null && _cpf.Length.Equals(11))
+                {
+                    _r.InfNfe.Dest = new DestModel
+                    {
+                        CPF = _cpf,
+                        XNome = _name,
+                        IndIEDest = "9",
+                        EnderDest = null
+                    };
+                }
                 else
                 {
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-                    if (this.Error.Errors != null)
+                    _r.InfNfe.Dest = new DestModel
                     {
-                        if (this.Error.Errors.Title == null)
-                            this.Error.Errors.Title = new List<string>() { "Erro não especificado na api de notas." };
+                        CNPJ = _cpf,
+                        XNome = _name,
+                        IndIEDest = "9",
+                        EnderDest = null
+                    };
+                }
+            }
+
+            // retirada
+            _r.InfNfe.Retirada = null;
+
+            // entrega
+            _r.InfNfe.Entrega = null;
+
+            var _total = 0.00;
+            var _desc = 0.00;
+            var _voutro = 0.00;
+            var _vbc = 0.00;
+            var _vicms = 0.00;
+            var _vipi = 0.00;
+            var _vpis = 0.00;
+            var _vcofins = 0.00;
+            //det
+            _r.InfNfe.Det = new System.Collections.Generic.List<DetModel>();
+            foreach (var item in data.Order.OrderProducts.Where(x => x.ProductType.Equals(1)))
+            {
+
+                var _prod = new ProdModel();
+                _prod.CProd = item.Product.Code.ToString();
+                _prod.CEAN = Ean(item.Product.BarCode);
+                _prod.XProd = item.ProductName;
+                _prod.NCM = item.Product.NcmName;
+                _prod.CEST = item.NcmState != null ? item.NcmState.Cest : string.Empty;
+                _prod.IndEscala = "S";
+                if (item.Product.CBENEF != null && item.Product.CBENEF.Length > 0)
+                    _prod.CBenef = item.Product.CBENEF;
+                else
+                    _prod.CBenef = null;
+                _prod.CFOP = item.Cfop;
+                _prod.UCom = item.Product.Unity;
+                _prod.QCom = (double)decimal.Round(item.Quantity, 2, MidpointRounding.AwayFromZero);
+                _prod.VUnCom = (double)decimal.Round(item.ProductPrice, 2, MidpointRounding.AwayFromZero);
+
+                if (item.ProductDiscount > 0)
+                {
+                    decimal localDesc = 0;
+                    if (item.ProductDiscountPercentual)
+                    {
+                        localDesc = ((decimal)_prod.VUnCom * (item.ProductDiscount / 100)) * item.Quantity;
+                        localDesc = decimal.Round(localDesc, 2, MidpointRounding.AwayFromZero);
                     }
                     else
-                        this.Error.Errors = new Errors() { Title = new List<string>() { "Erro não especificado na api de notas." } };
+                    {
+                        localDesc = decimal.Round(item.ProductDiscount * item.Quantity, 2, MidpointRounding.AwayFromZero);
+                    }
+                    Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
+                    _prod.VDesc = localDesc.ToString();
+
+                    _desc += (double)decimal.Round(localDesc, 2, MidpointRounding.AwayFromZero);
                 }
 
-                return null;
+                _prod.VProd = _prod.VUnCom * (double)item.Quantity;
+                _prod.CEANTrib = Ean(item.Product.BarCode);
+                _prod.UTrib = _prod.UCom;
+                _prod.QTrib = _prod.QCom;
+                _prod.VUnTrib = _prod.VUnCom;
+                _prod.IndTot = "1";
+
+                _total += _prod.VProd;
+
+                if (item.Product.CProdANP != null && item.Product.CProdANP.Length > 0)
+                {
+                    _prod.Comb = new CombModel();
+                    _prod.Comb.CProdANP = item.Product.CProdANP.ToUpper();
+                    _prod.Comb.DescANP = item.Product.DescANP.ToUpper();
+                    _prod.Comb.UFCons = item.Product.UFCons.ToUpper();
+                }
+
+                var _imposto = new ImpostoModel();
+
+                _imposto.VTotTrib = 0;
+
+                if (data.Official)
+                {
+
+                    _imposto.ICMS = new ICMSModel();
+
+                    if (_business.TaxationType == "SN")
+                    {
+
+                        if (item.NcmState.Csosn == "101")
+                        {
+                            _imposto.ICMS.ICMSSN102 = new ICMSSN102Model();
+                            _imposto.ICMS.ICMSSN102.Orig = "0";
+                            _imposto.ICMS.ICMSSN102.CSOSN = "102";
+                        }
+
+                        if (item.NcmState.Csosn == "102")
+                        {
+                            _imposto.ICMS.ICMSSN102 = new ICMSSN102Model();
+                            _imposto.ICMS.ICMSSN102.Orig = "0";
+                            _imposto.ICMS.ICMSSN102.CSOSN = "102";
+                        }
+
+                        if (item.NcmState.Csosn == "400")
+                        {
+                            _imposto.ICMS.ICMSSN400 = new ICMSSN400Model();
+                            _imposto.ICMS.ICMSSN400.Orig = "0";
+                            _imposto.ICMS.ICMSSN400.CSOSN = "400";
+                        }
+
+                        if (item.NcmState.Csosn == "500")
+                        {
+                            _imposto.ICMS.ICMSSN500 = new ICMSSN500Model();
+                            _imposto.ICMS.ICMSSN500.Orig = "0";
+                            _imposto.ICMS.ICMSSN500.CSOSN = "500"; //item.ncmState.csosn;
+                            _imposto.ICMS.ICMSSN500.VBCSTRet = 0;//decimal.ToDouble(item.Quantity * item.ProductPrice);
+                            _imposto.ICMS.ICMSSN500.PST = 0;//decimal.ToDouble(item.Quantity * item.ProductPrice);
+                            _imposto.ICMS.ICMSSN500.VICMSSubstituto = 0.00;
+                            _imposto.ICMS.ICMSSN500.VICMSSTRet = 0.00;
+
+                            if (item.NcmState.Icms == 0)
+                            {
+                                _imposto.ICMS.ICMSSN500.VBC = 0.00;
+                                _imposto.ICMS.ICMSSN500.PICMS = 0;
+                                _imposto.ICMS.ICMSSN500.VICMS = 0;
+                            }
+                            else
+                            {
+                                _imposto.ICMS.ICMSSN500.VBC = _prod.VProd;
+                                _imposto.ICMS.ICMSSN500.PICMS = Decimal.ToDouble(item.NcmState.Icms);
+                                _imposto.ICMS.ICMSSN500.VICMS = _imposto.ICMS.ICMSSN500.VBC * (_imposto.ICMS.ICMSSN500.PICMS / 100);
+                                _vbc += _imposto.ICMS.ICMSSN500.VBC;
+                                _vicms += _imposto.ICMS.ICMSSN500.VICMS;
+                            }
+                        }
+
+                        if (item.NcmState.Csosn == "900")
+                        {
+
+                            _imposto.ICMS.ICMSSN900 = new ICMSSN900Model();
+                            _imposto.ICMS.ICMSSN900.Orig = "0";
+                            _imposto.ICMS.ICMSSN900.CSOSN = "900"; //item.ncmState.csosn;
+
+                            _imposto.ICMS.ICMSSN900.ModBCST = null;
+                            _imposto.ICMS.ICMSSN900.VBCST = 0;
+                            _imposto.ICMS.ICMSSN900.PICMSST = 0;
+                            _imposto.ICMS.ICMSSN900.VICMSST = 0.00;
+
+                            _imposto.ICMS.ICMSSN900.ModBC = "3";
+                            if (item.NcmState.Icms == 0)
+                            {
+                                _imposto.ICMS.ICMSSN900.VBC = 0.00;
+                                _imposto.ICMS.ICMSSN900.PICMS = 0;
+                                _imposto.ICMS.ICMSSN900.VICMS = 0;
+                            }
+                            else
+                            {
+                                _imposto.ICMS.ICMSSN900.VBC = _prod.VProd;
+                                _imposto.ICMS.ICMSSN900.PICMS = Decimal.ToDouble(item.NcmState.Icms);
+                                _imposto.ICMS.ICMSSN900.VICMS = _imposto.ICMS.ICMSSN900.VBC * (_imposto.ICMS.ICMSSN900.PICMS / 100);
+                                _vbc += _imposto.ICMS.ICMSSN900.VBC.Value;
+                                _vicms += _imposto.ICMS.ICMSSN900.VICMS.Value;
+                            }
+                        }
+
+                        _imposto.PIS = new PISModel();
+                        _imposto.PIS.PISNT = new PISAliqModel();
+                        _imposto.PIS.PISNT.CST = "07";
+                        _imposto.COFINS = new COFINSModel();
+                        _imposto.COFINS.COFINSNT = new COFINSAliqModel();
+                        _imposto.COFINS.COFINSNT.CST = "07";
+
+                    }
+                    else
+                    {
+                        _r.InfNfe.Emit.CRT = "3";
+
+                        if (item.NcmState.Csosn == "00")
+                        {
+                            _imposto.ICMS.ICMS00 = new ICMSCSTModel();
+                            _imposto.ICMS.ICMS00.Orig = item.NcmState.IcmsOrigem;
+                            _imposto.ICMS.ICMS00.CST = "00";
+                            _imposto.ICMS.ICMS00.ModBC = item.NcmState.IcmsModBC;
+                            _imposto.ICMS.ICMS00.VBC = _prod.VProd;
+                            _imposto.ICMS.ICMS00.PICMS = Convert.ToDouble(item.NcmState.Icms);
+                            _imposto.ICMS.ICMS00.VICMS = _imposto.ICMS.ICMS00.VBC * (_imposto.ICMS.ICMS00.PICMS / 100);
+
+                            _vbc += _imposto.ICMS.ICMS00.VBC.Value;
+                            _vicms += _imposto.ICMS.ICMS00.VICMS.Value;
+                        }
+                        else if (item.NcmState.Csosn == "60")
+                        {
+                            _imposto.ICMS.ICMS60 = new ICMSCSTModel();
+                            _imposto.ICMS.ICMS60.Orig = item.NcmState.IcmsOrigem;
+                            _imposto.ICMS.ICMS60.CST = "60";
+                        }
+
+                        _imposto.IPI = null;
+
+                        _imposto.PIS = new PISModel();
+                        _imposto.PIS.PISAliq = new PISAliqModel();
+                        _imposto.PIS.PISAliq.CST = item.NcmState.PisCST;
+                        _imposto.PIS.PISAliq.VBC = _prod.VProd;
+                        _imposto.PIS.PISAliq.PPIS = Convert.ToDouble(item.NcmState.Pis);
+                        _imposto.PIS.PISAliq.VPIS = Convert.ToDouble(Math.Round(Convert.ToDecimal(_imposto.PIS.PISAliq.VBC * (_imposto.PIS.PISAliq.PPIS / 100)), 2));
+                        _vpis += _imposto.PIS.PISAliq.VPIS.Value;
+
+                        _imposto.COFINS = new COFINSModel();
+
+                        _imposto.COFINS.COFINSAliq = new COFINSAliqModel();
+                        _imposto.COFINS.COFINSAliq.CST = item.NcmState.CofinsCST;
+                        _imposto.COFINS.COFINSAliq.VBC = _prod.VProd;
+                        _imposto.COFINS.COFINSAliq.PCOFINS = Convert.ToDouble(item.NcmState.Cofins);
+                        _imposto.COFINS.COFINSAliq.VCOFINS = Convert.ToDouble(Math.Round(Convert.ToDecimal(_imposto.COFINS.COFINSAliq.VBC * (_imposto.COFINS.COFINSAliq.PCOFINS / 100)), 2));
+                        _vcofins += _imposto.COFINS.COFINSAliq.VCOFINS.Value;
+
+                        // if (data.order.business.addressState.ToLower() != data.order.client.addressState.ToLower())
+                        // {
+                        //     _imposto.ICMSUFDest = new ICMSCSTModel();
+                        //     _imposto.ICMSUFDest.VBCUFDest = 0;
+                        //     _imposto.ICMSUFDest.VBCFCPUFDest = 0;
+                        //     _imposto.ICMSUFDest.PFCPUFDest = 0;
+                        //     _imposto.ICMSUFDest.PICMSUFDest = 0;
+                        //     _imposto.ICMSUFDest.PICMSInter = Convert.ToDouble(item.ncmState.icms);
+                        //     _imposto.ICMSUFDest.PICMSInterPart = 100;
+                        //     _imposto.ICMSUFDest.VFCPUFDest = 0;
+                        //     _imposto.ICMSUFDest.VICMSUFDest = 0;
+                        //     _imposto.ICMSUFDest.VICMSUFRemet = 0;
+                        // }
+
+                        if (_r.InfNfe.Emit.CRT != "3")
+                        {
+                            _imposto.PIS = new PISModel();
+                            _imposto.PIS.PISNT = new PISAliqModel();
+                            _imposto.PIS.PISNT.CST = "07";
+                            _imposto.COFINS = new COFINSModel();
+                            _imposto.COFINS.COFINSNT = new COFINSAliqModel();
+                            _imposto.COFINS.COFINSNT.CST = "07";
+                        }
+                    }
+                }
+
+                _r.InfNfe.Det.Add(new DetModel
+                {
+                    Prod = _prod,
+                    Imposto = _imposto,
+                    InfAdProd = item.InfAdProd
+                });
+
             }
-            catch (Exception ex)
+
+            //total
+            _r.InfNfe.Total = new TotalModel();
+            _r.InfNfe.Total.ICMSTot = new ICMSTotModel();
+            _r.InfNfe.Total.ICMSTot.VBC = _vbc;
+            _r.InfNfe.Total.ICMSTot.VICMS = _vicms;
+            _r.InfNfe.Total.ICMSTot.VICMSDeson = 0;
+            _r.InfNfe.Total.ICMSTot.VFCPUFDest = 0;
+            _r.InfNfe.Total.ICMSTot.VICMSUFDest = 0;
+            _r.InfNfe.Total.ICMSTot.VICMSUFRemet = 0;
+            _r.InfNfe.Total.ICMSTot.VFCP = 0;
+            _r.InfNfe.Total.ICMSTot.VBCST = 0;
+            _r.InfNfe.Total.ICMSTot.VST = 0;
+            _r.InfNfe.Total.ICMSTot.VFCPST = 0;
+            _r.InfNfe.Total.ICMSTot.VFCPSTRet = 0;
+            _r.InfNfe.Total.ICMSTot.VProd = _total;
+            _r.InfNfe.Total.ICMSTot.VFrete = 0;
+            _r.InfNfe.Total.ICMSTot.VSeg = 0;
+            _r.InfNfe.Total.ICMSTot.VDesc = _desc;
+            _r.InfNfe.Total.ICMSTot.VII = 0;
+            _r.InfNfe.Total.ICMSTot.VIPI = _vipi;
+            _r.InfNfe.Total.ICMSTot.VIPIDevol = 0;
+            _r.InfNfe.Total.ICMSTot.VPIS = _vpis;
+            _r.InfNfe.Total.ICMSTot.VCOFINS = _vcofins;
+            _r.InfNfe.Total.ICMSTot.VOutro = _voutro;
+            _r.InfNfe.Total.ICMSTot.VNF = _total + _voutro - _desc;
+            _r.InfNfe.Total.ICMSTot.VTotTrib = 0;
+
+            // transporte
+            _r.InfNfe.Transp = new TranspModel();
+
+            _r.InfNfe.Transp.ModFrete = data.ModFrete;
+            _r.InfNfe.Transp.Vol = null;
+            _r.InfNfe.Transp.Transporta = null;
+
+            _r.InfNfe.Cobr = null;
+
+            _r.InfNfe.Transp.Transporta = null;
+
+            // pagamento
+            _r.InfNfe.Pag = new PagModel();
+            //_r.infNfe.pag.vTroco = 0;
+            _r.InfNfe.Pag.DetPag = new System.Collections.Generic.List<DetPagModel>();
+
+            if (data.InvoiceParcels.Any(p => p.Payment.Name.ToUpper().Contains("TEF")))
             {
-                return null;
+                data.InvoiceParcels.ForEach(p =>
+                {
+                    if (p.Payment.Name.ToLower().Contains("cr"))
+                    {
+                        if (p.TefTransaction == null)
+                        {
+                            p.TefTransaction = new Core.BC.Domain.Entities.tef.TefTransactionModel();
+                            p.TefTransaction.TefResult = new Core.BC.Domain.Entities.tef.TefResultModel();
+                            p.TefTransaction.TefResult.Tef = new Core.BC.Domain.Entities.tef.TefModel();
+
+                            p.TefTransaction.TefResult.Tef.NsuTransacao = "372178";
+                            p.TefTransaction.TefResult.Tef.CnpjCredenciadora = "92.702.0670001-96";
+                        }
+
+                        var detPag = new DetPagModel()
+                        {
+                            IndPag = "1",
+                            TPag = "03",
+                            // xPag = "CARTAO CREDITO",
+                            VPag = p.Value,
+                            Card = new CardModel()
+                            {
+                                TpIntegra = "1",
+                                CAut = p.TefTransaction.TefResult.Tef.NsuTransacao,
+                                CNPJ = p.TefTransaction.TefResult.Tef.CnpjCredenciadora.Replace(".", string.Empty).Replace("-", string.Empty),
+                                TBand = "99"
+                            }
+                        };
+                        _r.InfNfe.Pag.DetPag.Add(detPag);
+                    }
+                    else if (p.Payment.Name.ToLower().Contains("pix"))
+                    {
+                        var detPag = new DetPagModel()
+                        {
+                            IndPag = "1",
+                            TPag = "17",
+                            // xPag = "PIX",
+                            VPag = p.Value,
+                            Card = new CardModel()
+                            {
+                                TpIntegra = "1",
+                                CAut = p.TefTransaction.TefResult.Tef.NsuTerminal,
+                                CNPJ = p.TefTransaction.TefResult.Tef.CnpjCredenciadora.Replace(".", string.Empty).Replace("-", string.Empty),
+                                TBand = "99"
+                            }
+                        };
+                        _r.InfNfe.Pag.DetPag.Add(detPag);
+                    }
+                    else
+                    {
+                        var detPag = new DetPagModel()
+                        {
+                            IndPag = "1",
+                            TPag = "04",
+                            // xPag = "CARTAO DEBITO",
+                            VPag = p.Value,
+                            Card = new CardModel()
+                            {
+                                TpIntegra = "1",
+                                CAut = p.TefTransaction.TefResult.Tef.NsuTransacao,
+                                CNPJ = p.TefTransaction.TefResult.Tef.CnpjCredenciadora.Replace(".", string.Empty).Replace("-", string.Empty),
+                                TBand = "99"
+                            }
+                        };
+                        _r.InfNfe.Pag.DetPag.Add(detPag);
+                    }
+                });
             }
+            else
+            {
+
+                data.InvoiceParcels.Where(x => x.From == "nfe").ToList().ForEach(p =>
+                {
+                    if (p.Payment.Name.ToLower().Contains("cr"))
+                    {
+                        var detPag = new DetPagModel()
+                        {
+                            IndPag = "1",
+                            TPag = "03",
+                            // xPag = "Pagamento Dinheiro",
+                            VPag = p.Value,
+                            Card = new CardModel()
+                            {
+                                TpIntegra = "2",
+                            }
+                        };
+                        // var detPag = new detPagModel()
+                        // {
+                        //     indPag = "1",
+                        //     tPag = "03",
+                        //     // xPag = "CARTAO CREDITO",
+                        //     vPag = p.value,
+                        //     card = new cardModel()
+                        //     {
+                        //         tpIntegra = "1",
+                        //         cAut = p.tefTransaction.tefResult.tef.nsuTransacao,
+                        //         CNPJ = p.tefTransaction.tefResult.tef.cnpjCredenciadora.Replace(".", "").Replace("-", ""),
+                        //         tBand = "99"
+                        //     }
+                        // };
+                        _r.InfNfe.Pag.DetPag.Add(detPag);
+                    }
+                    else if (p.Payment.Name.ToLower().Contains("bito"))
+                    {
+
+                        var detPag = new DetPagModel()
+                        {
+                            IndPag = "1",
+                            TPag = "04",
+                            // xPag = "Pagamento Dinheiro",
+                            VPag = p.Value,
+                            Card = new CardModel()
+                            {
+                                TpIntegra = "2",
+                            }
+                        };
+                        // var detPag = new detPagModel()
+                        // {
+                        //     indPag = "1",
+                        //     tPag = "04",
+                        //     // xPag = "CARTAO DEBITO",
+                        //     vPag = p.value,
+                        //     card = new cardModel()
+                        //     {
+                        //         tpIntegra = "1",
+                        //         cAut = p.tefTransaction.tefResult.tef.nsuTransacao,
+                        //         CNPJ = p.tefTransaction.tefResult.tef.cnpjCredenciadora.Replace(".", "").Replace("-", ""),
+                        //         tBand = "99"
+                        //     }
+                        // };
+                        _r.InfNfe.Pag.DetPag.Add(detPag);
+                    }
+                    else if (p.Payment.Name.ToLower().Contains("pix"))
+                    {
+                        var detPag = new DetPagModel()
+                        {
+                            IndPag = "1",
+                            TPag = "17",
+                            // xPag = "Pagamento PIX",
+                            VPag = p.Value,
+                            Card = new CardModel()
+                            {
+                                TpIntegra = "2",
+                            }
+                        };
+                        _r.InfNfe.Pag.DetPag.Add(detPag);
+                    }
+                    else if (p.Payment.Name.ToLower().Contains("dinheiro"))
+                    {
+                        var detPag = new DetPagModel()
+                        {
+                            IndPag = "1",
+                            TPag = "01",
+                            // xPag = "Pagamento Dinheiro",
+                            VPag = p.Value
+                        };
+                        _r.InfNfe.Pag.DetPag.Add(detPag);
+                    }
+                    else
+                    {
+                        _r.InfNfe.Pag.DetPag.Add(new DetPagModel()
+                        {
+                            IndPag = "1",
+                            TPag = "99",
+                            XPag = "Pagamento direto",
+                            VPag = p.Value
+                        });
+                    }
+                });
+
+            }
+
+            return _r;
         }
 
-        public async Task<entities.NfeModelReturn> NfeSearch(entities.NfeListCommand cmd)
+        private static string Ean(string _p)
         {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
-                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/search", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<entities.NfeModelReturn>(json);
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
+            if (_p == null)
+                return "SEM GTIN";
+            if (_p.Length == 8)
+                return _p;
+            if (_p.Length == 12)
+                return _p;
+            if (_p.Length == 13)
+                return _p;
+            if (_p.Length == 14)
+                return _p;
+            return "SEM GTIN";
         }
 
-        public async Task<entities.NfseModelReturn> NfseSearch(entities.NfseListCommand cmd)
+        public static double RoundUp(double input, int places)
         {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
-                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/search", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<entities.NfseModelReturn>(json);
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<entities.NfeNumberDisableModelReturn> NfeNumberDisableSearch(entities.NfeNumberDisableListCommand cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
-                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfeNumberDisable/search", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<entities.NfeNumberDisableModelReturn>(json);
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        private void Status(HttpStatusCode rsp, string json)
-        {
-            this.TnStatusCode.Code = rsp;
-            if (!(rsp == HttpStatusCode.Created)
-                   && !(rsp == HttpStatusCode.OK))
-                this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-            this.TnStatusCode.Obj = json;
-        }
-
-        public async Task<entities.DfeModelReturn> DfeSearch(entities.DfeListCommand cmd, Guid businessUid)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("businessUid", $"{businessUid}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
-                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/dfe/search", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<entities.DfeModelReturn>(json);
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-
-        }
-
-        public async Task<string> DownloadNfe(entities.DfeListCommand cmd, Guid businessUid)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("businessUid", $"{businessUid}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
-                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/download", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                return json;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<bool> ManifestNfe(entities.EventoCommand cmd)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
-
-                var stringPayload = JsonConvert.SerializeObject(cmd);
-
-                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
-
-                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfeevent/manifest", httpContent);
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<bool>(json);
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
-                else
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-
-                return false;
-            }
-            catch (Exception ex)
-            {
-                return false;
-            }
-        }
-
-        public async Task<string> DfeXml(string key)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/dfe/xml/{key}");
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = json;
-
-                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
-                    return _rtn;
-                else
-                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
-        }
-
-        public async Task<entities.DfeModelReturn> Dfe(string cnpj)
-        {
-            var httpClient = new HttpClient();
-            try
-            {
-                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
-
-                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/dfe/business/{cnpj}");
-                var json = await rsp.Content.ReadAsStringAsync();
-
-                var _rtn = JsonConvert.DeserializeObject<entities.DfeModelReturn>(json);
-
-                return _rtn;
-            }
-            catch (Exception ex)
-            {
-                return null;
-            }
+            double multiplier = Math.Pow(10, Convert.ToDouble(places));
+            return Math.Ceiling(input * multiplier) / multiplier;
         }
     }
 }
