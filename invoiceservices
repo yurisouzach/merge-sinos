@@ -1,10 +1,11 @@
 namespace Front.API.Controllers
 {
     using System;
+    using System.Collections.Generic;
     using System.Threading.Tasks;
-    using global::Core.BC.Domain.Entities.person;
-    using global::Core.BC.Domain.Entities.person.Commands;
-    using global::Core.BC.Domain.Entities.person.interfaces;
+    using global::Core.BC.Domain.Entities.checklist;
+    using global::Core.BC.Domain.Entities.checklist.Commands;
+    using global::Core.BC.Domain.Entities.checklist.interfaces;
     using Interanet.Commons.Core.Shared.Interfaces;
     using Interanet.Commons.Core.Shared.Messages;
     using Interanet.Commons.Front.Shared.Base;
@@ -14,204 +15,111 @@ namespace Front.API.Controllers
     using Microsoft.Extensions.Logging;
     using Swashbuckle.AspNetCore.Annotations;
 
-    [Route("~/person")]
-    [ApiExplorerSettings(GroupName = @"person")]
-    [SwaggerTag("Api da Pessoas.")]
-    public class PersonController : DefaultControllerAbstract<PersonModel>
+    [Route("~/checklist")]
+    [ApiExplorerSettings(GroupName = @"checklist")]
+    [SwaggerTag("Api da Empresa.")]
+    public class ChecklistController : DefaultControllerAbstract<ChecklistModel>
     {
-        private readonly IpersonServices _service;
-
-        public PersonController(
-            IAppService<PersonModel> service,
-            ILogger<PersonModel> logger,
+        public ChecklistController(
+            IAppService<ChecklistModel> service,
+            ILogger<ChecklistModel> logger,
             INotificationHandler<Notification> notification)
             : base(service, logger, notification)
         {
             service.EnableUserAcl = true;
-            this._service = (IpersonServices)service;
         }
 
         [HttpPost]
         [SwaggerOperation(
         Summary = "Insere  um novo registro",
         Description = "")]
-        public async Task<IActionResult> Create(PersonBaseCommand cmd)
+        public async Task<IActionResult> Create(ChecklistBaseCommand cmd)
         {
             var response = await this.service.Create(cmd);
 
             return this.Response(response.IsValid ? response.Data : null, null, null);
 
         }
-
+        
         [HttpPut]
-        public async Task<IActionResult> Update(PersonUpdateCommand cmd)
+        [SwaggerOperation(
+        Summary = "Atualiza um registro",
+        Description = ".")]
+        public async Task<IActionResult> Update(ChecklistModel cmd)
         {
-            var response = await this.service.Update(cmd);
 
-            return this.Response(response.IsValid ? response.Data : null);
-        }
+            var app = (IchecklistServices)this.service;
+            var response = await app.Update(cmd);
 
-        [HttpGet]
-        [Route("{uid?}")]
-        public override async Task<IActionResult> GetById([FromRoute] Guid uid, [FromHeader] Guid businessUid)
-        {
-            var app = (IpersonServices)this.service;
-            return this.Response(app.GetByUid(uid), null);
+            return this.Response(true);
         }
 
         [HttpPost]
         [Route("search")]
+        [SwaggerOperation(
+       Summary = "Pesquisar",
+       Description = "Pesquisa de forma paginada ...")]
+        [SwaggerResponse(404, "Não há nenhum objeto cadastrado para este recurso.", null)]
+        [SwaggerResponse(200, "Ação realizada com sucesso.", typeof(ResponsePaginated<List<ChecklistModel>>))]
         public virtual async Task<IActionResult> Search(
-           [FromBody] PersonListCommand cmd,
-           [FromHeader] bool summary = false,
+           [FromBody] ChecklistListCommand cmd,
            [FromHeader] int pageSize = 10,
            [FromHeader] int page = 1,
            [FromHeader] string order = "asc",
-           [FromHeader] string columnOrder = "InsertedAt"
+           [FromHeader] string columnOrder = "Title"
            )
         {
             cmd.PageSize = pageSize;
             cmd.Order = order;
             cmd.ColumnOrder = columnOrder;
-            cmd.summary = summary;
-            var app = (IpersonServices)this.service;
-            var response = await app.Search(cmd).ConfigureAwait(false);
+            var app = (IchecklistServices)this.service;
+            var response = await app.Search(cmd);
             return this.Response(response.IsValid ? response : null, nameof(this.GetById), null);
         }
 
-        [HttpPut]
-        [Route("changepassword")]
-        public async Task<IActionResult> ChangePassword(PersonUpdatePasswordCommand cmd)
-        {
-            var app = (IpersonServices)this.service;
-            var response = await app.ChangePassword(cmd);
-            return this.Response(response);
-        }
-
         [HttpGet]
-        [Route("state")]
-        public virtual async Task<IActionResult> State()
-        {
-            var app = (IpersonServices)this.service;
-            var response = await app.GetState();
-            return this.Response(response);
-        }
-
-        [HttpGet]
-        [Route("city/{data}")]
-        public virtual async Task<IActionResult> City(string data)
-        {
-
-            var app = (IpersonServices)this.service;
-            var response = await app.GetCity(data);
-            return this.Response(response);
-        }
-
-        [HttpGet]
-        [Route("zipCode/{data}")]
-        public virtual async Task<IActionResult> ZipCode(string data)
-        {
-
-            var app = (IpersonServices)this.service;
-            var response = await app.GetZipCode(data);
-            return this.Response(response);
-        }
-
-        [HttpGet]
-        [Route("cnpj/{cnpj}")]
+        [Route("uid/{uid}")]
         [AllowAnonymous]
-        public async Task<IActionResult> GetCnpj(string cnpj)
+        [SwaggerOperation(
+      Summary = "Busca o checklist por uid",
+      Description = ".")]
+        public async Task<IActionResult> Uid(Guid uid)
         {
-            var app = (IpersonServices)this.service;
-            var response = await app.GetCnpj(cnpj);
-            return this.Response(response, null);
+            var app = (IchecklistServices)this.service;
+            var response = app.Uid(uid);
+            var name = app.GetConfigName(response.ChecklistConfigUid);
+
+            var newResponse = new
+            {
+                response = response,
+                name = name.ToUpper()
+            };
+
+            return this.Response(newResponse, null);
         }
 
         [HttpGet]
-        [Route("cpf/{cpf}")]
-        public virtual async Task<IActionResult> GetCpf(string cpf)
+        [Route("parent/{uid}")]
+        [SwaggerOperation(
+       Summary = "Pesquisar",
+       Description = "Pesquisa de forma paginada ...")]
+        [SwaggerResponse(404, "Não há nenhum objeto cadastrado para este recurso.", null)]
+        [SwaggerResponse(200, "Ação realizada com sucesso.", typeof(ResponsePaginated<List<ChecklistModel>>))]
+        public IActionResult ByPerson(
+           [FromHeader] Guid businessUid,
+           [FromRoute] Guid uid,
+           [FromHeader] string order = "asc",
+           [FromHeader] string columnOrder = "name"
+           )
         {
-
-            var app = (IpersonServices)this.service;
-            var response = await app.GetCpf(cpf);
+            var cmd = new ChecklistListCommand();
+            cmd.Order = order;
+            cmd.Uid = uid;
+            cmd.ColumnOrder = columnOrder;
+            var app = (IchecklistServices)this.service;
+            var response = app.Parent(cmd);
             return this.Response(response);
         }
 
-        [HttpGet]
-        [AllowAnonymous]
-        [Route("importExcel")]
-        public async Task<IActionResult> Import()
-        {
-            var app = (IpersonServices)this.service;
-            var response = await app.Import();
-            return this.Response(response);
-        }
-
-        [HttpGet]
-        [Route("all")]
-        public async Task<IActionResult> All()
-        {
-            var app = (IpersonServices)this.service;
-            var response = app.GetAll();
-            return this.Response(response, null);
-        }
-
-        [HttpGet]
-        [Route("allproviders")]
-        public async Task<IActionResult> AllProviders()
-        {
-            var app = (IpersonServices)this.service;
-            var response = app.GetAllProviders();
-            return this.Response(response, null);
-        }
-
-        [HttpGet]
-        [Route("employee")]
-        public IActionResult Employee()
-        {
-            var app = (IpersonServices)this.service;
-            var response = app.GetEmployee();
-            return this.Response(response, null);
-        }
-
-        [HttpGet]
-        [Route("number")]
-        public IActionResult Number()
-        {
-            var app = (IpersonServices)this.service;
-            var response = app.Number();
-            return this.Response(response, null);
-        }
-
-        [HttpGet]
-        [Route("banks")]
-        public async Task<IActionResult> Banks()
-        {
-            var app = (IpersonServices)this.service;
-            var response = await app.Banks().ConfigureAwait(false);
-            return this.Response(response, null);
-        }
-
-        [HttpGet]
-        [Route("birthday")]
-        public async Task<IActionResult> Birthday()
-        {
-            var app = (IpersonServices)this.service;
-            var response = await app.Birthday().ConfigureAwait(false);
-            return this.Response(response, null);
-        }
-
-        [HttpGet]
-        [Route("sendSchedule")]
-        [AllowAnonymous]
-        public async Task<IActionResult> SendSchedule() => this.Response(await this._service.SendBirthday().ConfigureAwait(false));
-
-        [HttpPost]
-        [Route("export/excel")]
-        public virtual async Task<IActionResult> ExportExcel([FromBody] PersonListCommand cmd) => this.Response(await this._service.SearchExportExcel(cmd).ConfigureAwait(false), null);
-
-        [HttpPost]
-        [Route("export/pdv")]
-        public virtual async Task<IActionResult> ExportPDV([FromBody] PersonListCommand cmd) => this.Response(await this._service.SearchExportPDV(cmd).ConfigureAwait(false), null);
     }
 }
