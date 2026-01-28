@@ -1,0 +1,4412 @@
+namespace App.Services.Services
+{
+    using System;
+    using System.Collections.Generic;
+    using System.ComponentModel;
+    using System.Globalization;
+    using System.IO;
+    using System.Linq;
+    using System.Linq.Expressions;
+    using System.Text;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using System.Xml;
+    using app.Commons;
+    using App.Services.Commons;
+    using App.Services.externalApi.talaodenotas.entities;
+    using App.Services.externalApi.tecnospeed.entities;
+    using global::AutoMapper;
+    using Core.BC.Domain.Entities;
+    using global::Core.BC.Domain.Entities.bank;
+    using global::Core.BC.Domain.Entities.business;
+    using global::Core.BC.Domain.Entities.invoice;
+    using global::Core.BC.Domain.Entities.invoice.Commands;
+    using global::Core.BC.Domain.Entities.invoice.interfaces;
+    using global::Core.BC.Domain.Entities.invoiceParcel;
+    using global::Core.BC.Domain.Entities.ncm;
+    using global::Core.BC.Domain.Entities.ncmState;
+    using global::Core.BC.Domain.Entities.order;
+    using global::Core.BC.Domain.Entities.order.interfaces;
+    using global::Core.BC.Domain.Entities.orderProduct;
+    using global::Core.BC.Domain.Entities.payment;
+    using global::Core.BC.Domain.Entities.personPay;
+    using global::Core.BC.Domain.Entities.product;
+    using Interanet.Commons.App.Shared.Base;
+    using Interanet.Commons.Core.Shared.Interfaces;
+    using Interanet.Commons.Core.Shared.Interfaces.Commands;
+    using Interanet.Commons.Core.Shared.Interfaces.Events;
+    using Interanet.Commons.Core.Shared.Messages;
+    using Interanet.Commons.Infra.Repository.Shared.Interfaces;
+    using MediatR;
+    using Microsoft.EntityFrameworkCore;
+    using Microsoft.Extensions.Logging;
+    using Microsoft.OData.Edm;
+    using Newtonsoft.Json;
+    using OfficeOpenXml;
+    using PuppeteerSharp;
+    using PuppeteerSharp.Media;
+    using NfeImport = App.Services.externalApi.talaodenotas.entities.NfeImport;
+    using PropertyDescriptor = System.ComponentModel.PropertyDescriptor;
+    using System.Xml.Linq;
+    using System.Text.Json;
+
+    public class InvoiceServices : GenericServiceAbstract<InvoiceModel>, IinvoiceServices
+    {
+        private readonly JsonSerializerSettings settings;
+        private readonly IorderServices _iOrder;
+        private readonly IRepository<InvoiceModel> _repository;
+        private readonly IRepository<Core.BC.Domain.Entities.cfop.CfopModel> _repositoryCfop;
+        private readonly IRepository<BusinessModel> _repositoryBusinessModel;
+        private readonly IRepository<NcmStateModel> _repositoryNcmState;
+        private readonly IRepository<NcmModel> _repositoryNcm;
+        private readonly IRepository<ProductModel> _repositoryProduct;
+        private readonly IRepository<InvoiceParcelModel> _repositoryInvoiceParcel;
+        private readonly IRepository<OrderModel> _repositoryOrder;
+        private readonly IRepository<OrderProductModel> _repositoryOrderProduct;
+        private readonly IRepository<BankModel> _repositoryBank;
+        private readonly IRepository<PaymentModel> _repPayment;
+        private readonly IRepository<PersonPayEntity> _repPersonPay;
+        private readonly IRepository<Core.BC.Domain.Entities.person.PersonModel> _repositoryPerson;
+
+        public InvoiceServices(
+           IMapper mapper,
+           IUnitOfWork uow,
+           ILogger<InvoiceModel> logger,
+           IRepository<InvoiceModel> repository,
+           IRepository<Core.BC.Domain.Entities.cfop.CfopModel> repositoryCfop,
+           IRepository<NcmStateModel> repositoryNcmState,
+           IRepository<NcmModel> repositoryNcm,
+           IRepository<PaymentModel> repPayment,
+           IRepository<PersonPayEntity> repPersonPay,
+           IRepository<ProductModel> repositoryProduct,
+           IRepository<InvoiceParcelModel> repositoryParcel,
+           IRepository<Core.BC.Domain.Entities.person.PersonModel> repositoryPerson,
+           IRepository<BankModel> repositoryBank,
+           IDomainEventBus bus,
+           INotificationHandler<Notification> notifications,
+           IRepository<OrderProductModel> repositoryOrderProduct,
+        INotificationHandler<CrossMessage> messages,
+           IRepository<OrderModel> repositoryOrder,
+           IorderServices iOrder,
+           IRepository<BusinessModel> repositoryBusinessModel)
+           : base(mapper, uow, bus, notifications, messages, logger, repository)
+        {
+            settings = new JsonSerializerSettings
+            {
+                ReferenceLoopHandling = ReferenceLoopHandling.Ignore
+            };
+
+            this._repository = repository;
+            this._repositoryCfop = repositoryCfop;
+            this._repositoryNcmState = repositoryNcmState;
+            this._repositoryProduct = repositoryProduct;
+            this._repositoryInvoiceParcel = repositoryParcel;
+            this._repositoryOrder = repositoryOrder;
+            this._repositoryPerson = repositoryPerson;
+            this._repositoryBusinessModel = repositoryBusinessModel;
+            this._repositoryBank = repositoryBank;
+            this._repositoryOrderProduct = repositoryOrderProduct;
+            this._iOrder = iOrder;
+            this._repPayment = repPayment;
+            this._repositoryNcm = repositoryNcm;
+            this._repPersonPay = repPersonPay;
+        }
+
+        public override async Task<bool> AssertToCreate(InvoiceModel data)
+        {
+            logger.LogInformation($"Dado passado para analise: {JsonConvert.SerializeObject(data, settings)}");
+
+            data.businessUid = user.businessUid;
+
+            if (data.Order != null)
+            {
+                data.Order.BusinessUid = user.businessUid;
+                data.Order.ClientUid = data.ClientUid;
+            }
+
+            var business = _repositoryBusinessModel
+                                        .Get()
+                                        .AsNoTracking()
+                                        .Where(x => x.uid == user.businessUid)
+                                        .FirstOrDefault();
+
+            if (data.NumberOS > 0)
+            {
+                var _order = this._repositoryOrder
+                            .Get()
+                            .AsNoTracking()
+                            .Where(x => x.removedAt == null && x.BusinessUid == user.businessUid && x.Status != "cancelado" && x.Number == data.NumberOS)
+                            .FirstOrDefault();
+
+                if (_order == null)
+                {
+                    await bus.Raise(Notification.CreateError("Error", "Ordem nao encontrada"));
+                    return false;
+                }
+
+                if (_order.Status.ToLower() == "concluído")
+                {
+                    await bus.Raise(Notification.CreateError("Error", "Ordem concluída"));
+                    return false;
+                }
+
+                data.OrderUid = _order.uid;
+            }
+
+            if (data.OrderUid != null)
+            {
+                var _order = _repositoryOrder
+                    .Get()
+                    .AsNoTracking()
+                    .Include(x => x.OrderProducts.Where(x => x.removedAt == null))
+                    .Where(x => x.uid.Equals(data.OrderUid))
+                    .FirstOrDefault();
+
+                data.ClientUid = _order.ClientUid;
+
+                if (data.Order != null)
+                {
+                    if (data.Order.Description != _order.Description)
+                    {
+                        _order.Description = data.Order.Description;
+                        _repositoryOrder.Save(_order);
+                        await _repositoryOrder.CommitChanges();
+                    }
+                    ;
+
+                    foreach (var iProduct in data.Order.OrderProducts)
+                    {
+                        var _prodcut = _repositoryOrderProduct
+                            .Get()
+                            .AsNoTracking()
+                            .Where(x => x.uid == iProduct.uid)
+                            .FirstOrDefault();
+
+                        _prodcut.OtherValue = iProduct.OtherValue;
+                        _prodcut.ShippingValue = iProduct.ShippingValue;
+                        _prodcut.Cfop = iProduct.Cfop == null ? string.Empty : iProduct.Cfop;
+
+                        _repositoryOrderProduct.Save(_prodcut);
+
+                        await _repositoryOrderProduct.CommitChanges();
+
+                    }
+
+                }
+                ;
+
+                data.Order = null;
+
+            }
+            else if (data.Type.ToLower() == "detached")
+            {
+                data.Order.Business = null;
+                var orderSaved = _repositoryOrder.Save(data.Order);
+                data.OrderUid = orderSaved.uid;
+                await _repositoryOrder.CommitChanges();
+            }
+            else if (data.Type.ToLower() == "balance")
+            {
+                var _client = this._repositoryPerson
+                                        .Get()
+                                        .AsNoTracking()
+                                        .Where(x => x.uid == data.ClientUid)
+                                        .FirstOrDefault();
+
+                _client.Balance += data.InvoiceParcels[0].Value;
+
+                this._repositoryPerson.Save(_client);
+
+                data.InvoiceParcels[0].AdvancePayment = true;
+
+                this._repPersonPay.Save(new PersonPayEntity
+                {
+                    PersonUid = _client.uid,
+                    PaymentUid = data.InvoiceParcels[0].PaymentUid,
+                    BankUid = data.InvoiceParcels[0].BankUid,
+                    Value = data.InvoiceParcels[0].Value,
+                    insertedAt = DateTime.Now,
+                    insertedPersonUid = user.personUid,
+                    businessUid = user.businessUid
+                });
+            }
+
+            data.Total = 0;
+
+            if (data.InvoiceParcels != null && data.InvoiceParcels.Count > 0)
+                foreach (var item in data.InvoiceParcels)
+                    data.Total += item.Value;
+            else
+                foreach (var iProduct in data.Order.OrderProducts)
+                    data.Total += iProduct.ProductPrice * iProduct.Quantity;
+
+            var ourId = business.OurIdLast;
+
+            if (data.InvoiceParcels.Count > 0)
+            {
+                for (int i = 0; i <= data.InvoiceParcels.Count - 1; i++)
+                {
+                    data.InvoiceParcels[i].AdvancePayment = data.InvoiceParcels[i].PaymentUid == Guid.Parse("b3058e54-0ab3-11f0-8443-00155d349079");
+                    if (data.InvoiceParcels[i].OurId == 0)
+                    {
+                        data.InvoiceParcels[i].OurId = ourId + 1;
+                        ourId++;
+                    }
+
+                    if (data.MergeParcels)
+                    {
+                        foreach (var p in data.InvoiceParcels.OrderBy(x => x.Deadline).OrderBy(x => x.PaymentUid))
+                        {
+                            if (p.Deadline.Date == data.InvoiceParcels[i].Deadline.Date
+                                && p.PaymentUid == data.InvoiceParcels[i].PaymentUid)
+                                p.OurId = data.InvoiceParcels[i].OurId;
+                            p.insertedAt = DateTime.Now;
+                            p.insertedPersonUid = user.personUid;
+                        }
+
+                    }
+
+                    if (data.InvoiceParcels[i].PaymentUid != Guid.Parse("b3058e54-0ab3-11f0-8443-00155d349079"))
+                        if (data.InvoiceParcels[i].Payment != null)
+                            if (data.InvoiceParcels[i].Payment.DefaultPay)
+                            {
+                                data.InvoiceParcels[i].Payed = true;
+                                data.InvoiceParcels[i].PayDate = DateTime.Now;
+
+                                var netValue = data.InvoiceParcels[i].Value - data.InvoiceParcels[i].ValueDiscount - (data.InvoiceParcels[i].Value * (data.InvoiceParcels[i].TaxValue / 100)) - (data.InvoiceParcels[i].Value - (data.InvoiceParcels[i].Value * (data.InvoiceParcels[i].TaxValue / 100))) * (data.InvoiceParcels[i].TaxAdvance / 100);
+
+                                var b = _repositoryBank.Get().Where(x => x.uid == data.InvoiceParcels[i].Payment.BankUid).FirstOrDefault();
+
+                                if (data.Type == "sale")
+                                    b.Balance += netValue;
+                                else
+                                    b.Balance += -netValue;
+
+                                _repositoryBank.Save(b);
+                            }
+
+                    data.InvoiceParcels[i].Payment = null;
+                    data.InvoiceParcels[i].insertedPersonUid = user.personUid;
+                    data.InvoiceParcels[i].insertedAt = DateTime.Now;
+
+                    data.InvoiceParcels[i].BusinessUid = user.businessUid;
+                    data.InvoiceParcels[i].Type = data.Type;
+
+                    if (data.InvoiceParcels[i].AdvancePayment)
+                    {
+                        data.InvoiceParcels[i].BalanceClient = data.InvoiceParcels[i].Value;
+                        data.InvoiceParcels[i].PayDate = DateTime.Now;
+                        var _dataClient = this._repositoryPerson.Get().Where(x => x.uid == data.ClientUid).FirstOrDefault();
+                        _dataClient.Balance -= data.InvoiceParcels[i].Value;
+                        this._repositoryPerson.Save(_dataClient);
+                        await this._repositoryPerson.CommitChanges();
+                    }
+                }
+
+                business.OurIdLast = ourId;
+                _repositoryBusinessModel.Save(business);
+
+                await _repositoryBusinessModel.CommitChanges();
+            }
+
+            if (data.Payed)
+            {
+                var b = _repositoryBank.Get().AsNoTracking().Where(x => x.uid == data.InvoiceParcels[0].BankUid).FirstOrDefault();
+
+                if (data.Type == "sale" || data.Type == "balance")
+                    b.Balance += data.Total;
+                else
+                    b.Balance += -data.Total;
+
+                _repositoryBank.Save(b);
+            }
+
+            if (data.Order != null)
+            {
+                data.Order.Client = null;
+                data.Order.Business = null;
+            }
+            data.Business = null;
+
+            /// AQUI EMITE O BOLETO
+            if (data.Type == "sale" && business.SendTicket && data.SendTicket)
+            {
+
+                var _payments = this._repPayment
+                                            .Get()
+                                            .AsNoTracking()
+                                            .Include(x => x.Bank)
+                                            .ThenInclude(x => x.BankWallets.Where(x => x.removedAt == null))
+                                            .Where(x => x.ParentbusinessUid == user.businessParentUid
+                                                        && x.removedAt == null)
+                                            .ToList();
+
+                var _extBoleto = new externalApi.tecnospeed.services.BoletoService();
+
+                var _listParcel = data
+                                    .InvoiceParcels
+                                    .ToList()
+                                    .AsEnumerable()
+                                    .GroupBy(x => new { x.OurId }, (key, group) => new
+                                    {
+                                        Key1 = key.OurId,
+                                        Result = group.ToList()
+                                    }).ToList();
+
+                var _lTicket = new List<externalApi.tecnospeed.entities.BoletoEntity>();
+
+                foreach (var parcel in _listParcel)
+                {
+
+                    var _payment = _payments
+                                            .Where(x => x.uid == parcel.Result.FirstOrDefault().PaymentUid)
+                                            .FirstOrDefault();
+
+                    if (_payment.IssueTicket)
+                    {
+
+                        decimal _totalticket = 0;
+
+                        foreach (var iParcel in parcel.Result)
+                        {
+                            _totalticket += iParcel.Value;
+                        }
+
+                        var _person = this._repositoryPerson
+                                            .Get()
+                                            .Where(x => x.uid == data.ClientUid)
+                                            .FirstOrDefault();
+
+                        _lTicket.Add(new externalApi.tecnospeed.entities.BoletoEntity
+                        {
+                            CedenteContaNumero = _payment.Bank.Account,
+                            CedenteContaNumeroDV = _payment.Bank.AccountDV,
+                            CedenteConvenioNumero = _payment.Bank.BankWallets.FirstOrDefault().Number,
+                            CedenteContaCodigoBanco = _payment.Bank.BankNumber,
+                            TituloCarteira = _payment.Bank.BankWallets.FirstOrDefault().Wallet,
+                            SacadoCPFCNPJ = _person.CnpjCpf,
+                            SacadoEmail = _person.Email,
+                            SacadoEnderecoNumero = _person.AddressNumber,
+                            SacadoEnderecoBairro = _person.AddressDistrict,
+                            SacadoEnderecoCEP = _person.AddressZipCode,
+                            SacadoEnderecoCidade = _person.AddressCity,
+                            SacadoEnderecoComplemento = _person.AddressNote,
+                            SacadoEnderecoLogradouro = _person.AddressStreet,
+                            SacadoEnderecoPais = "BRASIL",
+                            SacadoEnderecoUF = _person.AddressState,
+                            SacadoNome = _person.NameCompany,
+                            SacadoTelefone = _person.Phone1,
+                            SacadoCelular = _person.Phone1,
+                            TituloDataEmissao = DateTime.Now.ToString("dd/MM/yyyy"),
+                            TituloDataVencimento = Enumerable.FirstOrDefault<InvoiceParcelModel>(parcel.Result).Deadline.ToString("dd/MM/yyyy"),
+                            TituloMensagem01 = string.Empty,
+                            TituloMensagem02 = string.Empty,
+                            TituloMensagem03 = string.Empty,
+                            TituloNossoNumero = Enumerable.FirstOrDefault<InvoiceParcelModel>(parcel.Result).OurId.ToString(),
+                            TituloNumeroDocumento = Enumerable.FirstOrDefault<InvoiceParcelModel>(parcel.Result).OurId.ToString(),
+                            TituloValor = _totalticket.ToString("N2"),
+                            TituloLocalPagamento = "Pagável em qualquer banco até o vencimento."
+                        });
+
+                        var _resultTS = await _extBoleto.Post(_lTicket, business.CnpjCpf);
+
+                        var _impressaoBoleto = new BoletoImprimirEntity();
+                        _impressaoBoleto.TipoImpressao = "1";
+                        _impressaoBoleto.Boletos = new List<string>();
+
+                        for (int i = 0; i <= data.InvoiceParcels.Count - 1; i++)
+                        {
+                            if (data.InvoiceParcels[i].OurId == parcel.Key1)
+                            {
+                                data.InvoiceParcels[i].IdTecnospeed = _resultTS;
+
+                                var _list = JsonConvert.DeserializeObject<BoletoRetunEntity>(_resultTS);
+
+                                foreach (var ii in _list.Dados.Sucesso)
+                                {
+                                    data.InvoiceParcels[i].TecnospeedSituacao = ii.Situacao;
+                                    _impressaoBoleto.Boletos.Add(ii.Idintegracao);
+                                }
+
+                                data.InvoiceParcels[i].TecnospeedProtocolo = await _extBoleto.PostImprimir(_impressaoBoleto, business.CnpjCpf);
+
+                            }
+
+                        }
+                    }
+
+                }
+            }
+
+            return await base.AssertToCreate(data);
+        }
+
+        public async Task SaveXml(XmlInvoice data)
+        {
+
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
+
+            var business = _repositoryBusinessModel.Get().Where(x => x.uid == user.businessUid).FirstOrDefault();
+            var products = _repositoryProduct.Get().Where(x => x.ParentbusinessUid.Equals(Guid.Parse(user.ipRemote))).ToList();
+
+            var count = products.Count();
+            try
+            {
+
+                // Verifica fornecedor
+
+                var _person = _repositoryPerson.Get().Where(x => x.CnpjCpf == data.InfNFe.Emit.CNPJ && x.ParentbusinessUid.Equals(Guid.Parse(user.ipRemote))).FirstOrDefault();
+
+                if (_person == null)
+                {
+                    _person = new Core.BC.Domain.Entities.person.PersonModel
+                    {
+                        ParentbusinessUid = Guid.Parse(user.ipRemote),
+                        CnpjCpf = data.InfNFe.Emit.CNPJ,
+                        NameCompany = data.InfNFe.Emit.XNome,
+                        NameFantasy = data.InfNFe.Emit.XFant,
+                        Phone1 = data.InfNFe.Emit.EnderEmit.Fone,
+                        AddressZipCode = data.InfNFe.Emit.EnderEmit.CEP,
+                        AddressState = data.InfNFe.Emit.EnderEmit.UF,
+                        AddressCity = data.InfNFe.Emit.EnderEmit.XMun,
+                        AddressDistrict = data.InfNFe.Emit.EnderEmit.XBairro,
+                        AddressStreet = data.InfNFe.Emit.EnderEmit.XLgr,
+                        AddressNumber = data.InfNFe.Emit.EnderEmit.Nro,
+                        insertedAt = DateTime.Now,
+                        insertedPersonUid = user.personUid,
+                        IsProvider = true,
+                        Ie = data.InfNFe.Emit.IE
+                    };
+                    _person = _repositoryPerson.Save(_person);
+                }
+                else
+                {
+                    if (_repository.Get().Where(x => x.removedAt == null && x.ClientUid == _person.uid && x.Doc == data.InfNFe.Ide.NNF).ToList().Count > 0)
+                    {
+                        await bus.Raise(Notification.CreateError("Title", "Nota ja foi importada"));
+                        return;
+                    }
+                }
+
+                var ncms = new List<NcmStateModel>();
+
+                var _table = "<table>";
+                _table += "<tr>";
+                _table += "<td>Nome</td>";
+                _table += "<td>Codigo Produto</td>";
+                _table += "<td>Codigo Fabricante</td>";
+                _table += "<td>Qtd</td>";
+                _table += "<td>Venda R$</td>";
+                _table += "</tr>";
+
+                foreach (var item in data.InfNFe.Det)
+                {
+
+                    _table += "<tr>";
+                    _table += $"<td>{item.Prod.ProductName.ToUpper()}</td>";
+
+                    if (item.Product.uid == null || item.Product.removedAt != null)
+                    {
+
+                        count = count + 1;
+
+                        _table += $"<td>{count}</td>";
+
+                        if (item.Prod.VFrete == null)
+                            item.Prod.VFrete = 0;
+
+                        decimal costPrice = 0;
+
+                        decimal qtd = 0;
+
+                        if (item.Prod.QComSplit == 0)
+                        {
+                            qtd = (decimal)item.Prod.QCom;
+                            costPrice = (decimal)item.Prod.VUnCom - (decimal.Parse(item.Prod.VDesc) / (decimal)item.Prod.QCom) + ((decimal)item.Prod.VFrete / (decimal)item.Prod.QCom);
+                        }
+                        else
+                        {
+                            qtd = (decimal)item.Prod.QComSplit;
+                            costPrice = ((decimal)item.Prod.VUnCom - (decimal.Parse(item.Prod.VDesc) / (decimal)item.Prod.QComSplit) + ((decimal)item.Prod.VFrete / (decimal)item.Prod.QComSplit));
+                        }
+
+                        var _p = new ProductModel()
+                        {
+                            ParentbusinessUid = new Guid(user.ipRemote),
+                            StorageUid = item.Prod.StorageUid,
+                            Name = item.Prod.ProductName.ToUpper(),
+                            Code = count,
+                            Price = item.Prod.VSell,
+                            PriceCost = costPrice,
+                            Storage = qtd,
+                            CodeManufacturer = item.Prod.CProd,
+                            NcmName = item.Prod.NCM,
+                            Unity = item.Prod.UCom,
+                            ProductCategoryUid = item.Product.ProductCategoryUid,
+                            BarCode = item.Prod.CEAN,
+                            Type = 1,
+                            insertedAt = DateTime.Now,
+                            insertedPersonUid = user.personUid,
+                            CProdANP = item.Prod.Comb != null ? item.Prod.Comb.CProdANP : string.Empty,
+                            DescANP = item.Prod.Comb != null ? item.Prod.Comb.DescANP : string.Empty,
+                            UFCons = item.Prod.Comb != null ? item.Prod.Comb.UFCons : string.Empty,
+                            Description = $"Ultima Compra: Fornecedor: {data.InfNFe.Emit.XNome}, NF {data.InfNFe.Ide.NNF}, Quantidade {item.Prod.QCom}",
+                            ApplicationNote = item.Product.ApplicationNote,
+                            ProductInputs = item.Product.ProductInputs,
+                            Brand = item.Brand
+                        };
+
+                        _repositoryProduct.Save(_p);
+
+                        var cfop = _repositoryCfop
+                            .Get()
+                            .Where(x => x.CfopEntry == item.Prod.CFOP
+                                    && x.businessUid == user.businessUid
+                                    && x.removedAt == null)
+                            .FirstOrDefault();
+
+                        var cInt = string.Empty;
+                        var cExt = string.Empty;
+                        if (cfop != null)
+                        {
+                            cInt = cfop.CfopInt;
+                            cExt = cfop.CfopExt;
+                        }
+                        else
+                        {
+                            cInt = item.Prod.CFOP;
+                            cExt = item.Prod.CFOP;
+                        }
+
+                        var _r = _repositoryNcmState.Get()
+                            .Where(x => x.removedAt == null
+                                    && x.NcmName.Equals(_p.NcmName)
+                                    && x.businessUid.Equals(user.businessUid))
+                            .ToList();
+
+                        var _n = ncms.Where(x => x.removedAt == null
+                                && x.NcmName.Equals(_p.NcmName))
+                            .ToList();
+
+                        if (_r.Count().Equals(0) && _n.Count().Equals(0))
+                        {
+                            var _geo = new externalApi.geo.services.GeoServices();
+                            var _states = await _geo.States();
+
+                            foreach (var i in _states)
+                            {
+                                var c = string.Empty;
+                                if (i.NameShort == business.AddressState)
+                                {
+                                    c = cInt;
+                                }
+                                else
+                                {
+                                    c = cExt;
+                                }
+                                var sn = string.Empty;
+                                if (business.TaxationType == "SN")
+                                {
+                                    sn = item.Prod.CSOSN;
+                                }
+                                else
+                                {
+                                    sn = item.Prod.CST;
+                                }
+
+                                ncms.Add(new NcmStateModel
+                                {
+                                    NcmName = _p.NcmName,
+                                    Cfop = c,
+                                    Cest = item.Prod.CEST,
+                                    Csosn = sn,
+                                    insertedAt = DateTime.Now,
+                                    insertedPersonUid = user.personUid,
+                                    businessUid = user.businessUid,
+                                    State = i.NameShort
+                                });
+
+                            }
+                        }
+                        else
+                        {
+                            if (!_n.Count().Equals(0))
+                            {
+                                _r = _n;
+                            }
+
+                            foreach (var r in _r)
+                            {
+                                var _o = r;
+                                var edited = false;
+                                if (r.Cfop == null || r.Cfop == string.Empty)
+                                {
+                                    if (r.State == business.AddressState)
+                                    {
+                                        r.Cfop = cInt;
+                                    }
+                                    else
+                                    {
+                                        r.Cfop = cExt;
+                                    }
+                                    edited = true;
+                                }
+                                if ((r.Cest == null || r.Cest == string.Empty) && item.Prod.CEST != null)
+                                {
+                                    r.Cest = item.Prod.CEST;
+                                    edited = true;
+                                }
+                                if (r.Csosn == null || r.Csosn == string.Empty)
+                                {
+                                    if (business.TaxationType == "SN")
+                                    {
+                                        r.Csosn = item.Prod.CSOSN;
+                                    }
+                                    else
+                                    {
+                                        r.Csosn = item.Prod.CST;
+                                    }
+                                    edited = true;
+                                }
+                                if (edited)
+                                {
+                                    if (r.uid != null)
+                                    {
+                                        r.updatedAt = DateTime.Now;
+                                        r.updatedPersonUid = user.personUid;
+                                    }
+                                    else
+                                    {
+                                        ncms.Remove(_o);
+                                    }
+                                    ncms.Add(r);
+                                }
+
+                            }
+                        }
+
+                    }
+                    else
+                    {
+
+                        if (item.Prod.VFrete == null)
+                            item.Prod.VFrete = 0;
+                        var pro = products
+                            .Where(x => x.uid == item.Product.uid
+                                        && x.removedAt == null)
+                            .FirstOrDefault();
+
+                        _table += $"<td>{pro.Code}</td>";
+
+                        pro.updatedPersonUid = user.personUid;
+                        pro.updatedAt = DateTime.Now;
+                        if (item.Prod.QCom > 0)
+                        {
+                            if (item.Prod.QComSplit == 0)
+                                pro.Storage = pro.Storage + (decimal)item.Prod.QCom;
+                            else
+                                pro.Storage = pro.Storage + (decimal)item.Prod.QComSplit;
+                            pro.Description = $"Ultima Compra: Fornecedor: {data.InfNFe.Emit.XNome}, NF {data.InfNFe.Ide.NNF}, Quantidade {item.Prod.QCom} ";
+                        }
+                        //pro.codeManufacturer = item.prod.cProd;
+                        pro.BarCode = item.Prod.CEAN;
+                        pro.Unity = item.Prod.UCom;
+                        pro.Price = item.Prod.VSell;
+                        if (item.Prod.QCom > 0)
+                        {
+                            if (item.Prod.QComSplit == 0)
+                                pro.PriceCost = (decimal)item.Prod.VUnCom - (decimal.Parse(item.Prod.VDesc) / (decimal)item.Prod.QCom) + ((decimal)item.Prod.VFrete / (decimal)item.Prod.QCom);
+                            else
+                                pro.PriceCost = ((decimal)item.Prod.VUnCom - (decimal.Parse(item.Prod.VDesc) / (decimal)item.Prod.QComSplit) + ((decimal)item.Prod.VFrete / (decimal)item.Prod.QComSplit));
+                        }
+
+                        pro.NcmName = item.Prod.NCM;
+                        pro.StorageUid = item.Prod.StorageUid;
+                        pro.ApplicationNote = item.Product.ApplicationNote;
+                        pro.ProductInputs = item.Product.ProductInputs;
+                        pro.ParentbusinessUid = user.businessParentUid;
+                        _repositoryProduct.Save(pro);
+                    }
+
+                    _table += $"<td>{item.Prod.CProd}</td>";
+                    _table += $"<td>{((decimal)item.Prod.QCom).ToString("N2")}</td>";
+                    _table += $"<td>{item.Prod.VSell.ToString("N2")}</td>";
+
+                    _table += "</tr>";
+                }
+
+                _table += "<table>";
+
+                foreach (var n in ncms)
+                {
+                    _repositoryNcmState.Save(n);
+                    await _repositoryNcmState.CommitChanges();
+                }
+
+                // Invoice
+
+                var _invoce = _repository.Save(new InvoiceModel
+                {
+                    InvoiceDate = data.InfNFe.Ide.DhEmi,
+                    ClientUid = _person.uid,
+                    FinanceCategoryUid = data.Invoice.FinanceCategoryUid != null ? data.Invoice.FinanceCategoryUid : Guid.Parse("7b0f4262-71fe-11f0-862e-00155d349079"),
+                    insertedAt = DateTime.Now,
+                    insertedPersonUid = this.user.personUid,
+                    businessUid = Guid.Parse(this.user.ipRemote),
+                    Doc = data.InfNFe.Ide.NNF,
+                    Total = Convert.ToDecimal(data.InfNFe.Total.ICMSTot.VNF),
+                    Type = "purchase",
+                    Description = "Xml importado pelo sistema",
+                    Danfe = data.Invoice.Danfe,
+                    PurchaseProducts = _table
+                });
+
+                var _total = data.Invoice.InvoiceParcels.Count();
+                int _parcela = 1;
+                foreach (var item in data.Invoice.InvoiceParcels)
+                {
+                    item.InvoiceUid = _invoce.uid;
+                    item.Payment = null;
+                    item.BusinessUid = this.user.businessUid;
+                    item.Type = _invoce.Type;
+                    item.OurId = business.OurIdLast;
+                    item.Description = $"Parcela {_parcela} de {_total}";
+                    business.OurIdLast++;
+                    _parcela++;
+                    this._repositoryBusinessModel.Save(business);
+                    this._repositoryInvoiceParcel.Save(item);
+                }
+                await _repository.CommitChanges();
+            }
+            catch (Exception Ex)
+            {
+                Console.WriteLine(Ex.Message);
+            }
+
+            logger.LogInformation($"Dado passado para analise: {JsonConvert.SerializeObject(data, settings)}");
+        }
+
+        public override async Task<bool> AssertToUpdate(InvoiceModel data, InvoiceModel current)
+        {
+            var invoiceParcels = _repositoryInvoiceParcel
+                            .Get()
+                            .Where(x => x.removedAt == null
+                                            && x.InvoiceUid.Equals(data.uid))
+                            .ToList();
+
+            if (data.InvoiceParcels != null)
+            {
+                foreach (var item in data.InvoiceParcels)
+                {
+                    if (item.PayDate != null)
+                        if (item.PayDate != invoiceParcels.Find(x => x.uid == item.uid).PayDate)
+                        {
+
+                            if (item.Deadline.Date < DateTime.Now.Date)
+                            {
+                                await this.bus.Raise(Notification.CreateError("Data inválida", "A validade deve ser maior que a data atual"));
+                                return false;
+                            }
+
+                        }
+                }
+
+                foreach (var invoiceParcel in invoiceParcels)
+                {
+                    invoiceParcel.Payment = null;
+                    invoiceParcel.removedAt = DateTime.Now;
+                    invoiceParcel.updatedPersonUid = user.personUid;
+                    invoiceParcel.updatedAt = DateTime.Now;
+                    this._repositoryInvoiceParcel.Save(invoiceParcel);
+
+                }
+
+                foreach (var item in data.InvoiceParcels)
+                {
+                    item.InvoiceUid = data.uid;
+                    item.uid = null;
+                    item.Payment = null;
+                    item.insertedAt = DateTime.Now;
+                    item.insertedPersonUid = this.user.personUid;
+                    item.BusinessUid = user.businessUid;
+                    item.Type = data.Type;
+                    this._repositoryInvoiceParcel.Save(item);
+
+                }
+
+                await _repositoryInvoiceParcel.CommitChanges();
+            }
+            if (data.Type.Equals("detached") && data.Order != null)
+            {
+
+                if (data.Order.OrderProducts != null)
+                {
+                    var _dataOP = this._repositoryOrderProduct
+                                                        .Get()
+                                                        .Where(x => x.OrderUid == data.Order.uid && x.removedAt == null)
+                                                        .ToList();
+
+                    foreach (var item in _dataOP)
+                    {
+                        var _dataOPRemove = data.Order.OrderProducts.Where(x => x.uid == item.uid).FirstOrDefault();
+
+                        if (_dataOPRemove == null)
+                        {
+                            item.removedAt = DateTime.Now;
+                            this._repositoryOrderProduct.Save(item);
+                        }
+                    }
+                }
+
+                data.Order.Business = null;
+                data.Order.OrderProducts = null;
+                _repositoryOrder.Save(data.Order);
+                await _repositoryOrder.CommitChanges();
+
+            }
+
+            data.InvoiceParcels = null;
+            data.Client = null;
+            data.Business = null;
+            data.Order = null;
+
+            this.logger.LogInformation($"Dado passado para analise: {JsonConvert.SerializeObject(data, settings)}");
+
+            return await base.AssertToUpdate(data, current);
+        }
+
+        public Task<ResponsePaginated<List<InvoiceModel>>> SearchXml(InvoiceListCommand cmd)
+        {
+
+            var filter = PredicateExtensions.Begin<InvoiceModel>();
+
+            filter = filter.And(x => x.businessUid == this.user.businessUid
+                                                && x.removedAt == null
+                                                && x.Type == cmd.Type
+                                                && x.Description == ("Xml importado pelo sistema"));
+
+            if (cmd.Description != null && cmd.Description.Length > 0)
+            {
+
+                if (PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description).Length > 0)
+                {
+                    string _number = PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description);
+                    filter = filter.And(x => x.businessUid == user.businessUid
+                      && (
+                        x.Client.NameCompany.Contains(cmd.Description)
+                        || x.Doc == cmd.Description
+                        )
+                    );
+                }
+                else
+                    filter = filter.And(x => x.Client.NameCompany.Contains(cmd.Description));
+            }
+
+            if (cmd.StartDate != null)
+            {
+                var start = cmd.StartDate.Value.Date;
+                filter = filter.And(x => x.InvoiceDate >= start);
+            }
+
+            if (cmd.EndDate != null)
+            {
+                var end = cmd.EndDate.Value.Date.AddDays(1);
+                filter = filter.And(x => x.InvoiceDate < end);
+            }
+
+            if (cmd.PersonUid != null)
+            {
+                filter = filter.And(x => x.ClientUid == cmd.PersonUid);
+            }
+
+            return List(cmd, filter);
+        }
+
+        public Task<ResponsePaginated<List<InvoiceModel>>> Search(InvoiceListCommand cmd)
+        {
+            cmd.businessUid = user.businessUid;
+
+            var filter = PredicateExtensions.Begin<InvoiceModel>();
+            if (cmd.Type == "detached")
+                filter = filter.And(x => x.Type.ToLower().Equals("detached"));
+            else if (cmd.Type == "all")
+                filter = filter.And(x => x.Type.Equals("purchase")
+                                          && x.Description.ToLower().Equals("Xml importado pelo sistema")
+                                          || x.Type.Equals("sale"));
+            else if (cmd.Type == "sale")
+                filter = filter.And(x => (x.Order != null
+                                            && x.Order.Number > 0
+                                            && x.Order.OrderProducts.Count() > 0)
+                                            || x.Type == "balance");
+            else if (cmd.Filter == null)
+                filter = filter.And(x => x.Type.Equals(cmd.Type)
+                                        && x.Order != null);
+
+            if (cmd.Description != null && cmd.Description.Length > 0)
+            {
+
+                if (PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description).Length > 0)
+                {
+                    string _number = PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description);
+                    filter = filter.And(x => x.businessUid.Equals(user.businessUid)
+                        && (x.Order.Client.NameCompany.ToLower().Contains(cmd.Description.ToLower())
+                        || x.Client.NameCompany.ToLower().Contains(cmd.Description.ToLower())
+                        || x.insertedAt.Value.Day.Equals(_number)
+                        || x.insertedAt.Value.Month.ToString().Equals(_number)
+                        || x.insertedAt.Value.Year.ToString().Equals(_number)
+                        || x.Doc.Equals(PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description))
+                        || x.Order.Number.ToString().Equals(_number)
+                        || x.Total.ToString().Equals(_number)));
+                }
+                else
+                    filter = filter.And(x => x.businessUid.Equals(user.businessUid)
+                                             && (x.Order.Client.NameCompany.ToLower().Contains(cmd.Description.ToLower())
+                                             || x.Client.NameCompany.ToLower().Contains(cmd.Description.ToLower())));
+            }
+            else
+            {
+                filter = filter.And(x => x.businessUid.Equals(user.businessUid));
+            }
+
+            if (cmd.StartDate != null)
+            {
+                filter = filter.And(x => (x.updatedAt.Value.Date >= cmd.StartDate.Value.Date || x.insertedAt.Value.Date >= cmd.StartDate.Value.Date) || (x.updatedAt == null && x.InvoiceDate.Date >= cmd.StartDate.Value.Date));
+            }
+
+            if (cmd.EndDate != null)
+            {
+                filter = filter.And(x => (x.updatedAt.Value.Date <= cmd.EndDate.Value.Date || x.insertedAt.Value.Date <= cmd.EndDate.Value.Date) || (x.updatedAt == null && x.InvoiceDate.Date <= cmd.EndDate.Value.Date));
+            }
+
+            if (cmd.Filter != null)
+            {
+                if (cmd.Filter.PersonUid != null)
+                    filter = filter.And(x => x.ClientUid == cmd.Filter.PersonUid);
+
+                if (cmd.Filter.Type != null)
+                {
+                    if (cmd.Filter.Type == "emitted")
+                        if (cmd.Filter.BusinessUid != null)
+                            filter = filter.And(x => (x.Type.ToLower() == "sale" || x.Type.ToLower() == "detached")
+                                                    && ((x.TalaodenotasNFeUid != null && x.NfebusinessUid == cmd.Filter.BusinessUid)
+                                                            || (x.TalaodenotasNFSeUid != null && x.NfsebusinessUid == cmd.Filter.BusinessUid)
+                                                            || (x.TalaodenotasNFCeUid != null && x.NfcebusinessUid == cmd.Filter.BusinessUid)));
+                        else
+                        {
+                            switch (cmd.Filter.TypeDocument)
+                            {
+                                case "nfe":
+                                    {
+                                        filter = filter.And(x => (x.Type.ToLower() == "sale" || x.Type.ToLower() == "detached")
+                                                        && (x.TalaodenotasNFeUid != null));
+                                        break;
+                                    }
+                                case "nfce":
+                                    {
+                                        filter = filter.And(x => (x.Type.ToLower() == "sale" || x.Type.ToLower() == "detached")
+                                                            && (x.TalaodenotasNFCeUid != null));
+                                        break;
+                                    }
+                                case "nfse":
+                                    {
+                                        filter = filter.And(x => (x.Type.ToLower() == "sale" || x.Type.ToLower() == "detached")
+                                                            && (x.TalaodenotasNFSeUid != null));
+                                        break;
+                                    }
+                                default:
+                                    {
+                                        filter = filter.And(x => ((x.Type.ToLower() == "sale" || x.Type.ToLower() == "detached") || (x.Type.ToLower() == "purchase"))
+                                                        && (x.TalaodenotasNFeUid != null || x.TalaodenotasNFSeUid != null || x.TalaodenotasNFCeUid != null));
+                                        break;
+                                    }
+                            }
+
+                        }
+
+                    if (cmd.Filter.Type == "detail")
+                        filter = filter.And(x => x.TalaodenotasNFeUid != null || x.TalaodenotasNFSeUid != null);
+                }
+
+                if (cmd.Filter.DateStart != null)
+                    if (cmd.Filter.Type == "emitted")
+                    {
+                        switch (cmd.Filter.TypeDocument)
+                        {
+                            case "nfe":
+                                {
+                                    filter = filter.And(x => x.TalaodenotasNFeDate.Value.Date >= cmd.Filter.DateStart.Value.Date);
+                                    break;
+                                }
+                            case "nfce":
+                                {
+                                    filter = filter.And(x => x.TalaodenotasNFCeDate.Value.Date >= cmd.Filter.DateStart.Value.Date);
+                                    break;
+                                }
+                            case "nfse":
+                                {
+                                    filter = filter.And(x => x.TalaodenotasNFSeDate.Value.Date >= cmd.Filter.DateStart.Value.Date);
+                                    break;
+                                }
+                            default:
+                                {
+                                    filter = filter.And(x => x.TalaodenotasNFeDate.Value.Date >= cmd.Filter.DateStart.Value.Date
+                                                                        || x.TalaodenotasNFSeDate.Value.Date >= cmd.Filter.DateStart.Value.Date
+                                                                        || x.TalaodenotasNFCeDate.Value.Date >= cmd.Filter.DateStart.Value.Date);
+                                    break;
+                                }
+                        }
+                    }
+                    else
+                        filter = filter.And(x => x.updatedAt != null ? x.updatedAt.Value.Date >= cmd.Filter.DateStart.Value.Date : x.insertedAt >= cmd.Filter.DateStart.Value.Date);
+
+                if (cmd.Filter.DateEnd != null)
+                    if (cmd.Filter.Type == "emitted")
+                    {
+                        switch (cmd.Filter.TypeDocument)
+                        {
+                            case "nfe":
+                                {
+                                    filter = filter.And(x => x.TalaodenotasNFeDate.Value.Date <= cmd.Filter.DateEnd.Value.Date);
+                                    break;
+                                }
+                            case "nfce":
+                                {
+                                    filter = filter.And(x => x.TalaodenotasNFCeDate.Value.Date <= cmd.Filter.DateEnd.Value.Date);
+                                    break;
+                                }
+                            case "nfse":
+                                {
+                                    filter = filter.And(x => x.TalaodenotasNFSeDate.Value.Date <= cmd.Filter.DateEnd.Value.Date);
+                                    break;
+                                }
+                            default:
+                                {
+                                    filter = filter.And(x => x.TalaodenotasNFeDate.Value.Date <= cmd.Filter.DateEnd.Value.Date
+                                                    || x.TalaodenotasNFSeDate.Value.Date <= cmd.Filter.DateEnd.Value.Date
+                                                    || x.TalaodenotasNFCeDate.Value.Date <= cmd.Filter.DateEnd.Value.Date);
+                                    break;
+                                }
+                        }
+                    }
+
+                    else
+                        filter = filter.And(x => x.updatedAt != null ? x.updatedAt.Value.Date <= cmd.Filter.DateEnd.Value.Date : x.insertedAt.Value.Date <= cmd.Filter.DateEnd.Value.Date);
+
+            }
+
+            return List(cmd, filter);
+        }
+
+        public Task<ResponsePaginated<List<InvoiceModel>>> SearchNF(InvoiceListCommand cmd)
+        {
+            cmd.businessUid = user.businessUid;
+
+            var filter = PredicateExtensions.Begin<InvoiceModel>();
+
+            filter = filter.And(x => x.businessUid.Value == user.businessUid
+                                        && x.Type == "sale"
+                                        && x.Order.Status == "Concluído"
+                                        && x.Order.Number > 0
+                                        && x.Order.Type != "nfce"
+                                        && x.OrderUid != null
+                                );
+
+            if (cmd.StartDate != null)
+            {
+                var startDate = cmd.StartDate.Value.Date;
+                filter = filter.And(x => x.updatedAt != null ? x.updatedAt >= startDate : x.insertedAt >= startDate);
+            }
+
+            if (cmd.EndDate != null)
+            {
+                var endDate = cmd.EndDate.Value.AddDays(+1).Date;
+                filter = filter.And(x => x.updatedAt != null ? x.updatedAt <= endDate : x.insertedAt <= endDate);
+            }
+
+            if (cmd.Description != null && cmd.Description.Length > 0)
+            {
+
+                if (PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description).Length > 0)
+                {
+                    string _number = PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description);
+                    filter = filter.And(x => x.businessUid.Equals(user.businessUid)
+                        && (x.Order.Client.NameCompany.ToLower().Contains(cmd.Description.ToLower())
+                        || x.Client.NameCompany.ToLower().Contains(cmd.Description.ToLower())
+                        || x.insertedAt.Value.Day.Equals(_number)
+                        || x.insertedAt.Value.Month.ToString().Equals(_number)
+                        || x.insertedAt.Value.Year.ToString().Equals(_number)
+                        || x.Doc.Equals(PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description))
+                        || x.Order.Number.ToString().Equals(_number)
+                        || x.Total.ToString().Equals(_number)));
+                }
+                else
+                    filter = filter.And(x => x.Client.NameCompany.ToLower().Contains(cmd.Description.ToLower()));
+            }
+            return ListNF(cmd, filter);
+        }
+
+        public async Task<ExportModel> DownloadNF(InvoiceListCommand cmd)
+        {
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
+
+            var _business = _repositoryBusinessModel
+                    .Get()
+                    .Where(x => x.uid == user.businessUid).FirstOrDefault();
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _dfeInf = await _externaApi.DownloadNfe(new DfeListCommand
+            {
+                Type = cmd.Type,
+                BusinessUid = _business.TalaodenotasUid.Value,
+                Page = cmd.Page,
+                PageSize = cmd.PageSize,
+                Start = cmd.StartDate,
+                End = cmd.EndDate,
+            }, _business.TalaodenotasUid.Value);
+
+            var _r = new ExportModel
+            {
+                Name = $"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/downloadfile/{_dfeInf}"
+            };
+
+            return _r;
+        }
+
+        public Task<ResponsePaginated<List<InvoiceModel>>> ListNF(InvoiceListCommand cmd, Expression<Func<InvoiceModel, bool>> filter)
+        {
+
+            PropertyDescriptor prop = default;
+
+            if (cmd.ColumnOrder != default)
+                prop = TypeDescriptor.GetProperties(typeof(InvoiceModel)).Find(cmd.ColumnOrder, true);
+
+            if (prop == default)
+                prop = TypeDescriptor.GetProperties(typeof(InvoiceModel)).Find("insertedAt", true);
+
+            if (string.IsNullOrWhiteSpace(cmd.Order) || cmd.Order != "desc" && cmd.Order != "asc")
+                cmd.Order = "desc";
+
+            var query = repository.Get()
+                .TagWith("SearchNF")
+                .Include(x => x.Client)
+                .Include(x => x.Order)
+                .ThenInclude(x => x.OrderProducts.Where(x => x.removedAt == null && x.Approved))
+                .Where(x => x.removedAt == null);
+
+            if (filter != default)
+                query = query.Where(filter);
+
+            query = query.OrderByDescending(q => q.insertedAt);
+
+            List<InvoiceModel> data = query.Take(cmd.PageSize * cmd.Page)
+                .Skip(cmd.Page == 1 ? 0 : cmd.PageSize * (cmd.Page - 1))
+                .ToList();
+
+            int totalRows = query != null ? query.Count() : 0;
+            var paginated = new ResponsePaginated<List<InvoiceModel>>(data ?? new List<InvoiceModel>(), cmd.Page, cmd.PageSize, totalRows);
+
+            foreach (var item in paginated.Data)
+            {
+                if (item.Order != null)
+                {
+                    if (item.Order.OrderProducts != null)
+                    {
+                        item.Order.Client = null;
+                        item.Order.Invoice = null;
+                        item.Order.Client = null;
+                        item.Order.InsertedPerson = null;
+                        item.Order.Business = null;
+                        item.Order.OrderMedias = null;
+                        item.Order.Invoice = null;
+                        item.Order.Technician = null;
+                        item.Order.Checklist = null;
+                        foreach (var op in item.Order.OrderProducts)
+                        {
+                            op.Product = null;
+                            op.Order = null;
+                            op.Technician = null;
+                        }
+                    }
+                    if (item.Client != null)
+                    {
+                        item.Client.Schedules = null;
+                        item.Client.Orders = null;
+                        item.Client.Checklists = null;
+                        item.Client.OrderProducts = null;
+
+                    }
+                }
+
+            }
+
+            return Task.FromResult(paginated);
+
+        }
+
+        public Task<ResponsePaginated<List<InvoiceModel>>> List(InvoiceListCommand cmd, Expression<Func<InvoiceModel, bool>> filter)
+        {
+
+            PropertyDescriptor prop = default;
+
+            if (cmd.ColumnOrder != default)
+                prop = TypeDescriptor.GetProperties(typeof(InvoiceModel)).Find(cmd.ColumnOrder, true);
+
+            if (prop == default)
+                prop = TypeDescriptor.GetProperties(typeof(InvoiceModel)).Find("insertedAt", true);
+
+            if (string.IsNullOrWhiteSpace(cmd.Order) || cmd.Order != "desc" && cmd.Order != "asc")
+                cmd.Order = "desc";
+
+            var query = repository.Get()
+                .TagWith("===== Consultar XML Search Importar XML ====")
+                .Include(x => x.Client)
+                .Include(x => x.Order)
+                .ThenInclude(x => x.OrderProducts.Where(x => x.removedAt == null && x.Approved))
+                .ThenInclude(x => x.Product)
+                .Where(x => x.removedAt == null)
+                .AsNoTracking();
+
+            query = query.Where(filter);
+
+            query = query.OrderByDescending(q => q.insertedAt);
+
+            List<InvoiceModel> data = query.Take(cmd.PageSize * cmd.Page)
+                .Skip(cmd.Page == 1 ? 0 : cmd.PageSize * (cmd.Page - 1))
+                .ToList();
+
+            foreach (var item in data)
+                if (item.Order != null)
+                    item.Order.Client = null;
+
+            if (cmd.Filter != null)
+            {
+                if (cmd.Filter.BusinessUid.HasValue)
+                {
+                    data.ForEach(d =>
+                    {
+                        if (d.NfcebusinessUid != cmd.Filter.BusinessUid)
+                            d.DocNFCe = 0;
+                        if (d.NfebusinessUid != cmd.Filter.BusinessUid)
+                            d.DocNFe = 0;
+                        if (d.NfsebusinessUid != cmd.Filter.BusinessUid)
+                            d.DocNFSe = 0;
+                    });
+                    data = data.Where(d => d.DocNFe != 0 || d.DocNFSe != 0 || d.DocNFCe != 0).ToList();
+                    data.ForEach(d =>
+                    {
+                        var totalServicePrice = 0M;
+                        var totalProductPrice = 0M;
+                        d.Order.OrderProducts.ForEach(p =>
+                        {
+                            if (p.ProductType == 1)
+                            {
+                                totalProductPrice += ((p.ProductPrice - (p.ProductDiscountPercentual ? p.ProductPrice * p.ProductDiscount / 100 : p.ProductDiscount)) * (p.Quantity)) + p.OtherValue;
+                            }
+                            if (p.ProductType == 2)
+                            {
+                                totalServicePrice += ((p.ProductPrice - (p.ProductDiscountPercentual ? p.ProductPrice * p.ProductDiscount / 100 : p.ProductDiscount)) * (p.Quantity)) + p.OtherValue;
+                            }
+                        });
+                        d.TotalService = totalServicePrice;
+                        d.Total = totalServicePrice * Convert.ToDecimal(d.DocNFSe != 0)
+                                + totalProductPrice * Convert.ToDecimal(d.DocNFe != 0);
+                    });
+                }
+
+                if (cmd.Filter.Type == "emitted" || cmd.Filter.Type == "detail")
+                {
+                    data.ForEach(d =>
+                    {
+                        var totalServicePrice = 0M;
+                        var totalProductPrice = 0M;
+                        if (d.Order != null)
+                        {
+                            d.Order.OrderProducts.ForEach(p =>
+                            {
+                                if (p.removedAt == null && p.Approved)
+                                {
+                                    if (p.ProductType == 1)
+                                    {
+                                        totalProductPrice += ((p.ProductPrice - (p.ProductDiscountPercentual ? p.ProductPrice * p.ProductDiscount / 100 : p.ProductDiscount)) * (p.Quantity)) + p.OtherValue + p.ShippingValue;
+                                    }
+                                    if (p.ProductType == 2)
+                                    {
+                                        totalServicePrice += ((p.ProductPrice - (p.ProductDiscountPercentual ? p.ProductPrice * p.ProductDiscount / 100 : p.ProductDiscount)) * (p.Quantity)) + p.OtherValue;
+                                    }
+                                }
+                            });
+                            d.TotalProduct = totalProductPrice;
+                            d.TotalService = totalServicePrice;
+                        }
+                        if (d.Type == "detached")
+                            d.TotalProduct = d.Total;
+                    });
+                }
+            }
+
+            int totalRows = query != null ? query.Count() : 0;
+            var paginated = new ResponsePaginated<List<InvoiceModel>>(data ?? new List<InvoiceModel>(), cmd.Page, cmd.PageSize, totalRows);
+
+            return Task.FromResult(paginated);
+        }
+
+        public Task<ResponsePaginated<List<InvoiceModel>>> SearchPay(InvoiceListCommand cmd)
+        {
+            cmd.businessUid = user.businessUid;
+
+            var filter = PredicateExtensions.Begin<InvoiceModel>();
+
+            filter = filter.And(x => x.Type.Equals(cmd.Type));
+
+            if (cmd.Description != null && cmd.Description.Length > 0)
+            {
+                if (PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description).Length > 0)
+                    filter = filter.And(x => x.businessUid.Equals(user.businessUid)
+                    && (x.Client.NameCompany.Equals(int.Parse(cmd.Description))
+                    || x.insertedAt.Value.Day.Equals(int.Parse(cmd.Description))
+                    || x.insertedAt.Value.Month.Equals(int.Parse(cmd.Description))
+                    || x.insertedAt.Value.Year.Equals(int.Parse(cmd.Description))));
+                else
+                    filter = filter.And(x => x.businessUid.Equals(user.businessUid) && x.Client.NameCompany.Contains(cmd.Description));
+            }
+            else
+            {
+                filter = filter.And(x => x.businessUid.Equals(user.businessUid));
+            }
+
+            return ListPay(cmd, filter);
+        }
+
+        public Task<ResponsePaginated<List<InvoiceModel>>> ListPay(IListCommand cmd, Expression<Func<InvoiceModel, bool>> filter)
+        {
+
+            PropertyDescriptor prop = default;
+
+            if (cmd.ColumnOrder != default)
+                prop = TypeDescriptor.GetProperties(typeof(InvoiceModel)).Find(cmd.ColumnOrder, true);
+
+            if (prop == default)
+                prop = TypeDescriptor.GetProperties(typeof(InvoiceModel)).Find("insertedAt", true);
+
+            if (string.IsNullOrWhiteSpace(cmd.Order) || cmd.Order != "desc" && cmd.Order != "asc")
+                cmd.Order = "desc";
+
+            var query = repository.Get()
+                .Include(x => x.Client)
+                .Include(y => y.InvoiceParcels.Where(x => x.removedAt == null))
+                .Where(x => x.removedAt == null);
+
+            if (filter != default)
+                query = query.Where(filter);
+
+            query = query.OrderByDescending(q => q.Client.NameCompany);
+
+            List<InvoiceModel> data = query.Take(cmd.PageSize * cmd.Page)
+                .Skip(cmd.Page == 1 ? 0 : cmd.PageSize * (cmd.Page - 1))
+                .ToList();
+
+            int totalRows = query != null ? query.Count() : 0;
+            var paginated = new ResponsePaginated<List<InvoiceModel>>(data ?? new List<InvoiceModel>(), cmd.Page, cmd.PageSize, totalRows);
+
+            return Task.FromResult(paginated);
+
+        }
+
+        public async Task<InvoiceModel> GetByUid(Guid cmd)
+        {
+            var _l = _repository.Get()
+                            .Include(x => x.Client)
+                            .Include(y => y.InvoiceParcels.Where(x => x.removedAt == null))
+                            .ThenInclude(x => x.Payment)
+                            .Include(x => x.Order)
+                            .ThenInclude(x => x.Client)
+                            .Include(x => x.Order)
+                            .ThenInclude(x => x.OrderProducts.Where(x => x.removedAt == null && x.Approved))
+                            .ThenInclude(x => x.Product)
+                            .Include(x => x.Order)
+                            .ThenInclude(x => x.Business)
+                            .ThenInclude(x => x.BusinessCnae.Where(x => x.removedAt == null))
+                            .Include(x => x.InvoiceParcels.Where(x => x.removedAt == null))
+                            .Where(x => x.uid.Equals(cmd) && x.removedAt == null)
+                            .FirstOrDefault();
+
+            var _update = false;
+
+            if (_l.TalaodenotasNFeUid != null)
+            {
+                _update = true;
+                var _r = await this.NfeStatus(_l.TalaodenotasNFeUid.Value);
+                if (_r.Status == "DONE")
+                    _l.Done = true;
+                else if (_r.Status == "ERROR" || _r.Status == "CANCEL")
+                {
+                    _l.Done = false;
+                    _l.TalaodenotasNFeUid = null;
+                }
+            }
+
+            if (_l.TalaodenotasNFCeUid != null)
+            {
+                _update = true;
+                var _r = await this.NfeStatus(_l.TalaodenotasNFCeUid.Value);
+                if (_r.Status == "DONE")
+                    _l.DoneNfce = true;
+                else if (_r.Status == "ERROR" || _r.Status == "CANCEL")
+                {
+                    _l.DoneNfce = false;
+                    _l.TalaodenotasNFCeUid = null;
+                }
+            }
+
+            if (_l.TalaodenotasNFSeUid != null)
+            {
+
+                _update = true;
+                var _r = await this.NfseStatus(_l.TalaodenotasNFSeUid.Value);
+                if (_r.Status == "DONE")
+                {
+                    _l.DoneNfse = true;
+
+                    var _doc = new XmlDocument();
+                    _doc.LoadXml($"<root>{_r.XmlProc}</root>");
+
+                    XmlNodeList tpNumber;
+
+                    if (_doc.GetElementsByTagName("Numero").Count > 0)
+                        tpNumber = _doc.GetElementsByTagName("Numero");
+                    else
+                        tpNumber = _doc.GetElementsByTagName("nNFS-e");
+
+                    long number = 0;
+                    try
+                    {
+                        number = long.Parse(tpNumber[0].InnerText);
+                    }
+                    catch { number = 0; }
+
+                    _l.DoneNfse = true;
+                    if (number > 0)
+                        _l.DocNFSe = number;
+                    _l.NfseXml = $"<root>{_r.XmlProc}</root>";
+
+                }
+                else if (_r.Status == "ERROR" || _r.Status == "CANCEL")
+                {
+                    _l.DoneNfse = false;
+                    _l.TalaodenotasNFSeUid = null;
+                }
+            }
+
+            if (_update)
+            {
+                this._repository.Save(_l);
+                await this._repository.CommitChanges();
+            }
+
+            var ncms = _repositoryNcmState
+                                    .Get()
+                                    .Where(x => x.removedAt == null && x.businessUid == user.businessUid)
+                                    .ToList();
+            var ncmss = _repositoryNcm
+                                    .Get()
+                                    .Where(x => x.removedAt == null)
+                                    .ToList();
+
+            if (_l.Order != null)
+                foreach (var p in _l.Order.OrderProducts)
+                {
+                    if (p.ProductType == 1)
+                    {
+                        if (_l.Order.Client != null)
+                        {
+                            var ncm = ncms.Where(x => x.NcmName == p.Product.NcmName && x.State == _l.Order.Client.AddressState).FirstOrDefault();
+                            p.Cfop = ncm != null ? ncm.Cfop : string.Empty;
+                            p.NcmUid = ncm != null ? ncmss.Where(x => x.removedAt == null && x.Name.ToLower() == ncm.NcmName.ToLower()).FirstOrDefault()?.uid : null;
+                        }
+                        else
+                            p.Cfop = string.Empty;
+                    }
+                    p.NetValue = ((p.ProductPrice - (p.ProductDiscountPercentual ? p.ProductPrice * p.ProductDiscount / 100 : p.ProductDiscount)) * (p.Quantity)) + p.OtherValue;
+                }
+            ;
+
+            if (_l.Client != null)
+                if (_l.Client.EmailXml == null || _l.Client.EmailXml.Length == 0)
+                    _l.Client.EmailXml = _l.Client.Email;
+
+            return _l;
+        }
+
+        public List<InvoiceModel> IsDue(Guid cmd)
+        {
+            var grid = _repository.Get().Include(y => y.Order.Client).Include(y => y.InvoiceParcels).Where(x => x.Order.Client.uid.Equals(cmd) && x.removedAt == null);
+
+            if (grid.Count() == 0)
+                return null;
+            var _grid = new List<InvoiceModel>();
+            foreach (var invoice in grid)
+            {
+                var _l = new List<InvoiceParcelModel>();
+                foreach (var size in invoice.InvoiceParcels)
+                {
+                    if (!size.IsRemoved && !size.Payed && size.Deadline < DateTime.Now)
+                    {
+                        _l.Add(size);
+                    }
+                }
+                if (_l.Count > 0)
+                {
+                    invoice.InvoiceParcels = _l;
+                    _grid.Add(invoice);
+                }
+            }
+
+            return _grid;
+        }
+
+        public async Task<InvoiceModel> GenerateNf(InvoiceModel cmd)
+        {
+            var _invoiceSave = new InvoiceModel();
+
+            Guid businessUid = cmd.Order.BusinessUid != null ? cmd.Order.BusinessUid.Value : user.businessUid;
+
+            if (cmd.uid != null && !cmd.PDV)
+            {
+                _invoiceSave = _repository
+                                        .Get()
+                                        .Where(x => x.removedAt == null && x.uid.Equals(cmd.uid))
+                                        .FirstOrDefault();
+
+                if (_invoiceSave == null)
+                {
+                    await bus.Raise(Notification.CreateError("Title", "Nota nao encontrada"));
+                    return null;
+                }
+            }
+
+            //cmd.order.orderProducts = _invoice.order.orderProducts;
+
+            cmd.Business = null;
+            cmd.Client = null;
+
+            var _invoice = cmd;
+
+            if (!cmd.TypeNf.Equals(2))
+            {
+                var _lP = new List<OrderProductModel>();
+                foreach (var item in _invoice.Order.OrderProducts.Where(x => x.ProductPrice > 0))
+                    _lP.Add(item);
+
+                _invoice.Order.OrderProducts = _lP;
+            }
+
+            // NFCe 
+            if (cmd.TypeNf.Equals(3))
+            {
+
+                _invoiceSave.TalaodenotasNFCeDate = DateTime.Now;
+
+                var _business = _repositoryBusinessModel
+                    .Get()
+                    .Where(x => x.uid == user.businessUid)
+                    .FirstOrDefault();
+
+                _invoice.Official = _business.Nfce;
+                _invoice.ModFrete = "9";
+
+                _invoiceSave.ClientUid = _invoice.ClientUid;
+
+                var cpf = string.Empty;
+                var name = string.Empty;
+                if (_invoice.ClientUid != null)
+                {
+                    cpf = this._repositoryPerson.Get().Where(x => x.uid == _invoice.ClientUid).FirstOrDefault().CnpjCpf;
+                    name = this._repositoryPerson.Get().Where(x => x.uid == _invoice.ClientUid).FirstOrDefault().NameCompany;
+                }
+
+                if (_invoice.Order.Type == "nfce")
+                {
+                    _invoice.Order.ClientUid = _invoice.ClientUid;
+
+                    _invoice.Client = null;
+                    _invoice.Order.Client = null;
+
+                    _invoice.Type = "sale";
+                    _invoice.insertedAt = Date.Now;
+                    _invoice.insertedPersonUid = user.personUid;
+                    _invoice.businessUid = user.businessUid;
+
+                    if (_invoice.Order.Number == 0)
+                    {
+                        var maxNumber = this._repositoryOrder
+                            .Get()
+                            .Where(x => x.BusinessUid == user.businessUid && x.Type == "nfce")
+                            .Select(x => (int?)x.Number) // usa nullable para evitar exceção no Max()
+                            .Max();
+
+                        _invoice.Order.Number = (maxNumber ?? 0) + 1;
+                    }
+
+                    _invoice.Order.BusinessUid = user.businessUid;
+                    _invoice.Order.Business = null;
+                    _invoice.Order.insertedAt = DateTime.Now;
+                    _invoice.Order.updatedAt = DateTime.Now;
+                    _invoice.Order.Status = "Concluído";
+                    _invoice.Order.Color = string.Empty;
+                    _invoice.Order.Color = string.Empty;
+                    _invoice.Order.Description = string.Empty;
+                    _invoice.Order.InternalCommentary = string.Empty;
+                    _invoice.Order.DescriptionPay = string.Empty;
+                    _invoice.Order.Brand = string.Empty;
+                    _invoice.Order.Plate = string.Empty;
+                    _invoice.Order.Chassi = string.Empty;
+                    _invoice.Order.Motor = string.Empty;
+                    _invoice.Order.InsertedPerson = null;
+                    _invoice.Order.insertedPersonUid = user.personUid;
+
+                    int _ourId = 0;
+                    var lastOurId = this._repositoryInvoiceParcel
+                                                        .Get()
+                                                        .Where(x => x.OurId > 0 && x.Invoice.businessUid == user.businessUid)
+                                                        .OrderByDescending(x => x.OurId)
+                                                        .FirstOrDefault();
+                    if (lastOurId != null)
+                        _ourId = lastOurId.OurId;
+
+                    foreach (var item in _invoice.InvoiceParcels)
+                    {
+                        if (item.uid == null)
+                        {
+                            _ourId++;
+                            item.OurId = _ourId;
+                            var payment = item.Payment;
+                            item.Payment = null;
+                            item.Payed = payment.DefaultPay;
+                            item.PayDate = DateTime.Now;
+                            item.Deadline = DateTime.Now;
+                            item.BusinessUid = user.businessUid;
+                            item.insertedAt = DateTime.Now;
+                            item.insertedPersonUid = user.personUid;
+                            item.BusinessUid = user.businessUid;
+                            item.Type = _invoice.Type;
+                            item.InvoiceUid = _invoice.uid;
+                            _repositoryInvoiceParcel.Save(item);
+                            item.Payment = payment;
+
+                            _invoice.Official = payment.Nfce;
+                        }
+
+                    }
+
+                    _business.OurIdLast = _ourId;
+
+                    foreach (var item in _invoice.Order.OrderProducts)
+                    {
+                        item.OrderUid = _invoice.OrderUid;
+                        item.businessUid = user.businessUid;
+                        item.insertedAt = DateTime.Now;
+                        item.insertedPersonUid = user.personUid;
+                        item.Product = null;
+                        _repositoryOrderProduct.Save(item);
+
+                        var _storage = _repositoryProduct
+                                        .Get()
+                                        .Where(x => x.uid.Value == item.ProductUid.Value)
+                                        .FirstOrDefault();
+                        if (!cmd.OnlySave && cmd.InvoiceParcels.Where(x => x.InvoiceUid != null).Count() == 0)
+                            _storage.Storage -= item.Quantity;
+                        _storage.businessParentUid = user.businessParentUid;
+                        _repositoryProduct.Save(_storage);
+                    }
+
+                }
+
+                _invoice.NfceOfficial = _invoice.Official;
+
+                if (_invoice.Official)
+                {
+                    foreach (var p in _invoice.Order.OrderProducts.Where(x => x.ProductType == 1))
+                    {
+                        p.NcmState = _repositoryNcmState
+                            .Get()
+                            .Where(x => x.removedAt == null
+                            && x.NcmName == p.Product.NcmName
+                            && x.businessUid == user.businessUid
+                            && x.State.ToLower() == _business.AddressState.ToLower())
+                            .FirstOrDefault();
+
+                        if (p.NcmState == null)
+                        {
+                            p.Product.NcmName = "87089990";
+                            p.NcmState = _repositoryNcmState
+                                                    .Get()
+                                                            .Where(x => x.removedAt == null
+                                                                        && x.NcmName == p.Product.NcmName
+                                                                        && x.State == _business.AddressState.ToLower()
+                                                                        && x.businessUid == businessUid)
+                                                            .FirstOrDefault();
+                            if (p.NcmState == null)
+                            {
+                                await bus.Raise(Notification.CreateError("Title", "Produto " + p.ProductName + " sem ncm ou tabela de ncm vazia."));
+                                return null;
+                            }
+                            p.Cfop = p.NcmState.Cfop;
+                        }
+
+                        p.Cfop = p.NcmState.Cfop;
+                    }
+                }
+
+                if (!cmd.OnlySave)
+                {
+                    if (_invoiceSave.DocNFCe == 0 && _invoice.Official)
+                    {
+                        _business.NfceLast++;
+                        _invoiceSave.DocNFCe = _business.NfceLast;
+                        _invoice.DocNFCe = _business.NfceLast;
+                    }
+                    else if (_invoiceSave.DocNFCe == 0)
+                    {
+                        _invoice.DocNFCe = _invoice.Order.Number;
+                    }
+
+                    // _invoice.order.business = _business;
+
+                    var _externaApi = new externalApi.talaodenotas.services.Services();
+
+                    var _r = await _externaApi.Nfe(Nfe.GenerateNfce(_invoice, _invoiceSave.DocNFCe.ToString(), _business, cpf, name));
+
+                    if (_r != null)
+                    {
+                        _invoiceSave.NfeXml = _r.XmlSend;
+                        if (!_r.Status.ToLower().Equals("error"))
+                        {
+                            _repositoryBusinessModel.Save(_business);
+                            if (_invoice.Order.Type == "nfce")
+                            {
+                                _invoice.insertedAt = DateTime.Now;
+                                _invoice.DoneNfce = true;
+                                _invoice.NfcebusinessUid = _invoice.Order.BusinessUid;
+                                _invoice.TalaodenotasNFCeDate = DateTime.Now;
+                                _invoice.TalaodenotasNFCeUid = _r.Uid;
+                                _invoice.TalaodenotasNFCeError = null;
+                                if (_invoice.uid != null)
+                                    _invoice.InvoiceParcels = null;
+                                _repository.Save(_invoice);
+                                await this._repository.CommitChanges();
+                                await this._repositoryProduct.CommitChanges().ConfigureAwait(false);
+                                return _invoice;
+                            }
+                            else
+                            {
+                                _invoiceSave.TalaodenotasNFCeError = null;
+                                _invoiceSave.DoneNfce = true;
+                                _invoiceSave.NfcebusinessUid = _invoice.Order.BusinessUid;
+                                _invoiceSave.TalaodenotasNFCeUid = _r.Uid;
+                                _invoiceSave.TalaodenotasNFCeDate = DateTime.Now;
+                            }
+
+                            await this._repositoryProduct.CommitChanges().ConfigureAwait(false);
+
+                        }
+                        else
+                        {
+                            // await _repository.CommitChanges();
+                            _invoice.DocNFCe = 0;
+                            if (_invoice.OrderUid != null)
+                                _invoice.Order = null;
+                            if (_invoice.ClientUid != null)
+                                _invoice.Client = null;
+                            if (_invoice.InvoiceParcels.Where(x => x.InvoiceUid != null).Count() > 0)
+                                _invoice.InvoiceParcels = null;
+
+                            _invoiceSave.TalaodenotasNFCeError = _r.XmlReturn;
+                            _repository.Save(_invoice);
+                            await _repository.CommitChanges();
+
+                            var _return = new XmlDocument();
+                            _return.LoadXml($"<retorno>{_r.XmlReturn.Replace("<?xml version=\"1.0\" encoding=\"utf-8\"?>", string.Empty).Replace("<?xml version='1.0' encoding='UTF-8'?>", string.Empty)}</retorno>");
+
+                            if (_return.GetElementsByTagName("xMotivo")[1] != null)
+                                await bus.Raise(Notification.CreateError("Title", _return.GetElementsByTagName("xMotivo")[1].InnerXml));
+                            else if (_return.GetElementsByTagName("xMotivo")[0] != null)
+                                await bus.Raise(Notification.CreateError("Title", _return.GetElementsByTagName("xMotivo")[0].InnerXml));
+                            else
+                                await bus.Raise(Notification.CreateError("Title", "Erro na geração da nota."));
+
+                            return _invoice;
+                        }
+                    }
+                    else
+                    {
+                        await bus.Raise(Notification.CreateError("Title", _externaApi.Error.Errors.Title.FirstOrDefault()));
+                        return null;
+                    }
+                }
+                else
+                {
+                    _invoice.DocNFCe = 0;
+                    if (_invoice.uid != null)
+                    {
+                        _invoice.Order = null;
+                        _invoice.Client = null;
+                        _invoice.InvoiceParcels = null;
+                    }
+                    _repository.Save(_invoice);
+                    await _repository.CommitChanges();
+                    return _invoice;
+                }
+            }
+
+            // NFe 
+            if (cmd.TypeNf.Equals(1))
+            {
+                _invoiceSave.Type = cmd.Type;
+                _invoiceSave.ClientUid = _invoice.ClientUid;
+                _invoiceSave.OrderUid = _invoice.OrderUid;
+
+                if (_invoice.DocNFe > 0 && _invoice.TalaodenotasNFeUid != null)
+                {
+                    await bus.Raise(Notification.CreateError("Title", "Nota ja foi socilitada"));
+                    return null;
+                }
+                else
+                {
+                    _invoice.TalaodenotasNFeDate = DateTime.Now;
+
+                    foreach (var iProd in _invoice.Order.OrderProducts.Where(x => x.ProductType == 1 && x.Approved))
+                    {
+                        iProd.Product = this._repositoryProduct
+                                                            .Get()
+                                                            .Where(x => x.uid == iProd.ProductUid)
+                                                            .FirstOrDefault();
+
+                        iProd.NcmState = _repositoryNcmState.Get().Where(x => x.removedAt == null
+                                                    && x.NcmName == iProd.Product.NcmName
+                                                    && x.State == _invoice.Order.Client.AddressState
+                                                    && x.businessUid == businessUid)
+                            .FirstOrDefault();
+                        if (iProd.NcmState == null)
+                        {
+
+                            iProd.Product.NcmName = "87089990";
+                            iProd.NcmState = _repositoryNcmState
+                                                    .Get()
+                                                            .Where(x => x.removedAt == null
+                                                                        && x.NcmName == iProd.Product.NcmName
+                                                                        && x.State == _invoice.Order.Client.AddressState
+                                                                        && x.businessUid == businessUid)
+                                                            .FirstOrDefault();
+                            if (iProd.NcmState == null)
+                            {
+                                await bus.Raise(Notification.CreateError("Title", "Produto " + iProd.ProductName + " sem ncm ou tabela de ncm vazia."));
+                                return null;
+                            }
+                            iProd.Cfop = iProd.NcmState.Cfop;
+                            this._repositoryOrderProduct.Save(iProd);
+                        }
+                        else if (string.IsNullOrEmpty(iProd.NcmState.Cest))
+                            iProd.NcmState.Cest = "0199900";
+                    }
+                    ;
+
+                    var _business = _repositoryBusinessModel
+                                                    .Get()
+                                                    .Where(x => x.uid == businessUid)
+                                                    .FirstOrDefault();
+
+                    if (_invoiceSave.DocNFe == 0)
+                    {
+                        _business.NfeLast++;
+                        _invoiceSave.DocNFe = _business.NfeLast;
+                    }
+
+                    var _externaApi = new externalApi.talaodenotas.services.Services();
+                    var _r = await _externaApi.Nfe(Nfe.GenerateNfe(_invoice, _invoiceSave.DocNFe.ToString(), _business.TaxationType == "SN"));
+                    if (_r != null)
+                    {
+                        _invoiceSave.NfeXml = _r.XmlSend;
+                        if (!_r.Status.ToLower().Equals("error"))
+                        {
+                            _invoiceSave.Done = true;
+                            _invoiceSave.TalaodenotasNFeUid = _r.Uid;
+                            _invoiceSave.TalaodenotasNFeDate = DateTime.Now;
+                            _invoiceSave.NfeProt = _r.XmlProtocol;
+                            _invoiceSave.NfebusinessUid = businessUid;
+                            _repositoryBusinessModel.Save(_business);
+                        }
+                        else
+                        {
+                            var _return = new XmlDocument();
+                            _return.LoadXml($"<retorno>{_r.XmlReturn.Replace("<?xml version=\"1.0\" encoding=\"utf-8\"?>", string.Empty).Replace("<?xml version='1.0' encoding='UTF-8'?>", string.Empty)}</retorno>");
+                            await bus.Raise(Notification.CreateError("Title", _return.GetElementsByTagName("xMotivo")[1].InnerXml));
+                            return null;
+                        }
+                    }
+                    else
+                    {
+                        await bus.Raise(Notification.CreateError("Title", _externaApi.Error.Errors.Title.FirstOrDefault()));
+                        return null;
+                    }
+                }
+            }
+
+            // NFSe
+            if (cmd.TypeNf.Equals(2))
+            {
+                if (_invoice.TalaodenotasNFSeUid != null)
+                {
+                    await bus.Raise(Notification.CreateError("Title", "Nota ja foi socilitada"));
+                    return null;
+                }
+                else
+                {
+                    var _business = _repositoryBusinessModel
+                                   .Get()
+                                   .Include(x => x.BusinessCnae.Where(x => x.removedAt == null))
+                                   .Where(x => x.uid == businessUid)
+                                   .FirstOrDefault();
+
+                    cmd.TaxataxationType = _business.TaxationType;
+
+                    if (_invoiceSave.DocNFSe == 0)
+                    {
+                        _business.NfseLast++;
+                        _business.NfseLote++;
+                        _invoiceSave.DocNFSe = _business.NfseLast;
+                        _repositoryBusinessModel.Save(_business);
+                    }
+
+                    _invoice.TalaodenotasNFSeDate = DateTime.Now;
+
+                    var _externaApi = new externalApi.talaodenotas.services.Services();
+
+                    cmd.Business = _business;
+
+                    var _r = await _externaApi.Nfse(Nfse.GenerateNfse(cmd, _invoiceSave.DocNFSe.ToString(), _business.AddressCity, _business.NfseLote.ToString()));
+
+                    if (_r != null)
+                    {
+                        _invoiceSave.NfseXml = _r.XmlSend;
+
+                        if (cmd.Retention)
+                            _invoice.Issqn = cmd.Iss;
+                        if (!_r.Status.ToLower().Equals("error"))
+                        {
+                            _invoiceSave.TalaodenotasNFSeUid = _r.uid;
+                            _invoiceSave.TalaodenotasNFSeDate = DateTime.Now;
+                            _invoiceSave.NfsebusinessUid = businessUid;
+
+                            var _invoiceParcel = this._repositoryInvoiceParcel
+                                                                        .Get()
+                                                                        .Where(x => x.InvoiceUid == cmd.uid && x.removedAt == null)
+                                                                        .ToList();
+
+                            if (_r.XmlProtocol?.Length == 50)
+                                _invoiceSave.DocNFSe = int.Parse(_r.XmlProtocol.Substring(25, 11).TrimStart('0'));
+
+                            if (cmd.Retention)
+                                foreach (var iIP in _invoiceParcel)
+                                {
+                                    if (iIP.From == "nfse")
+                                        iIP.Issqn = _invoice.Issqn / _invoiceParcel.Where(x => x.From == "nfse").Count();
+                                    this._repositoryInvoiceParcel.Save(iIP);
+                                }
+
+                        }
+                        else
+                        {
+                            _invoiceSave.TalaodenotasNFSeUid = null;
+                            await bus.Raise(Notification.CreateError("Title", _r.XmlReturn));
+                            return null;
+                        }
+
+                    }
+                    else
+                    {
+                        await bus.Raise(Notification.CreateError("Title", _externaApi.Error.Errors.Title.FirstOrDefault()));
+                        return null;
+                    }
+                }
+            }
+
+            var _clientUid = _invoiceSave.ClientUid;
+
+            _invoiceSave.Client = null;
+            _invoiceSave.Order = null;
+            _invoiceSave.FinanceCategory = null;
+            _invoiceSave.updatedPersonUid = user.personUid;
+            _invoiceSave.updatedAt = DateTime.Now;
+            _invoiceSave.businessUid = user.businessUid;
+
+            _repository.Save(_invoiceSave);
+            await _repository.CommitChanges();
+
+            _invoiceSave.ClientUid = _clientUid;
+            _repository.Save(_invoiceSave);
+            await _repository.CommitChanges();
+
+            return _invoiceSave;
+        }
+
+        public async Task<bool> GenerateNf(XmlInvoice cmd)
+        {
+
+            cmd.Invoice = _repository
+                .Get()
+                .Where(x => x.uid == cmd.Invoice.uid)
+                .FirstOrDefault();
+
+            var _json = _repository
+                .Get()
+                .Where(x => x.uid == cmd.Invoice.uid)
+                .FirstOrDefault().Danfe;
+
+            var _nfeImport = JsonConvert.DeserializeObject<NfeImport>(_json);
+
+            var _business = _repositoryBusinessModel
+                                .Get()
+                                .Where(x => x.CnpjCpf == cmd.InfNFe.Emit.CNPJ && x.removedAt == null)
+                                .FirstOrDefault();
+
+            if (_business == null)
+            {
+                await bus.Raise(Notification.CreateError("Title", "CNPJ emitente diferente da compra"));
+                return false;
+            }
+
+            _business.NfeLast++;
+            _repositoryBusinessModel.Save(_business);
+
+            cmd.InfNFe.Ide.Serie = _business.NfeSerie.ToLower();
+            cmd.InfNFe.Ide.NNF = _business.NfeLast.ToString();
+            cmd.InfNFe.Ide.CNF = _business.NfeLast.ToString();
+            //    cmd.InfNFe.ide.natOp = _nfeImport.nfeProc.NFe.infNFe.ide.natOp;
+            var _externalApi = new externalApi.talaodenotas.services.Services();
+
+            cmd.InfNFe.Emit = new EmitModel();
+            cmd.InfNFe.Emit.CNPJ = _nfeImport.NfeProc.NFe.InfNFe.Dest.CNPJ;
+            cmd.InfNFe.Dest.CNPJ = _nfeImport.NfeProc.NFe.InfNFe.Emit.CNPJ;
+
+            if (cmd.InfNFe.Emit.EnderEmit == null)
+                cmd.InfNFe.Emit.EnderEmit = new EnderEmitModel();
+            cmd.InfNFe.Emit.EnderEmit.CPais = "1058";
+            cmd.InfNFe.Emit.EnderEmit.XPais = "BRASIL";
+
+            if (cmd.InfNFe.Dest.EnderDest.Fone == null || cmd.InfNFe.Dest.EnderDest.Fone.Length == 0)
+                cmd.InfNFe.Dest.EnderDest.Fone = "00000000000";
+
+            cmd.InfNFe.Dest.EnderDest.CPais = "1058";
+            cmd.InfNFe.Dest.EnderDest.XPais = "BRASIL";
+
+            if (cmd.InfNFe.Ide.NatOp.ToLower().Contains("devolu"))
+                cmd.InfNFe.Ide.FinNFe = "4"; // devolucao
+            else
+                cmd.InfNFe.Ide.FinNFe = "1"; // Normal
+
+            cmd.InfNFe.Dest.IE = _nfeImport.NfeProc.NFe.InfNFe.Emit.IE != null ? _nfeImport.NfeProc.NFe.InfNFe.Emit.IE : null;
+            cmd.InfNFe.Dest.IndIEDest = _nfeImport.NfeProc.NFe.InfNFe.Emit.IE != null ? "1" : "2"; // 1 possui ie || 2 insento de ie
+            // cmd.InfNFe.ide.tpNF = "0"; // 0 é entrada e 1 é saida
+
+            var _vFRETE = 0.00;
+            var _vProd = 0.00;
+            var _vPIS = 0.00;
+            var _vIPI = 0.00;
+            var _vCOFINS = 0.00;
+            var _vICMS = 0.00;
+            var _vICMSST = 0.00;
+            var _vTotTrib = 0.00;
+            var _vDesconto = 0.00;
+            var _vOutro = 0.00;
+            var _vBC = 0.00;
+
+            var _vBCST = 0.00;
+            var _vST = 0.00;
+
+            List<DetModel> det = new List<DetModel>();
+            foreach (var item in cmd.InfNFe.Det)
+                if (item.Selected != null && item.Selected.Value)
+                    det.Add(item);
+
+            cmd.InfNFe.Det = det;
+
+            if (_business.TaxationType == "SN")
+                cmd.InfNFe.Emit.CRT = "1";
+
+            foreach (var item in cmd.InfNFe.Det)
+            {
+
+                item.Imposto.VTotTrib = 0;
+
+                if (item.Selected != null && item.Selected.Value)
+                {
+                    var _storage = _repositoryProduct
+                                            .Get()
+                                            .Where(x => x.CodeManufacturer.ToLower() == item.Prod.CProd.ToLower() && x.ParentbusinessUid.Value == user.businessParentUid)
+                                            .FirstOrDefault();
+
+                    if (_storage != null)
+                    {
+                        _storage.Storage = _storage.Storage - Convert.ToDecimal(item.Prod.QCom);
+
+                        _repositoryProduct.Save(_storage);
+                    }
+
+                    var _descItem = 0.00;
+                    if (item.Prod.VFrete != null && item.Prod.VFrete.Value > 0)
+                        _vFRETE += item.Prod.VFrete.Value;
+                    else
+                        item.Prod.VFrete = null;
+
+                    item.Prod.CST = null;
+                    item.Prod.CSOSN = null;
+                    if (item.Prod.VOutro != null && item.Prod.VOutro > 0)
+                        _vOutro += item.Prod.VOutro.Value;
+                    else
+                        item.Prod.VOutro = null;
+
+                    if (item.Prod.VDesc != null && item.Prod.VDesc.Length > 0 && double.Parse(item.Prod.VDesc) > 0)
+                    {
+                        _descItem = double.Parse(item.Prod.VDesc) * item.Prod.QCom;
+                        item.Prod.VDesc = _descItem.ToString();
+                        _vDesconto += _descItem;
+
+                    }
+                    else
+                    {
+                        item.Prod.VDesc = null;
+                    }
+                    item.Prod.VProd = (item.Prod.VUnCom * item.Prod.QCom);
+                    item.Prod.QTrib = item.Prod.QCom;
+                    _vProd += item.Prod.VProd;
+
+                    var _imposto = _nfeImport.NfeProc.NFe.InfNFe.Det
+                        .Where(x => x.Prod.XProd.ToLower() == item.Prod.XProd.ToLower())
+                        .FirstOrDefault()
+                        .Imposto;
+
+                    item.Imposto.ICMS = new ICMSModel();
+
+                    if (_business.TaxationType == "SN")
+                    {
+                        _nfeImport.NfeProc.NFe.InfNFe.Total.ICMSTot.VFCPST = 0;
+                        _nfeImport.NfeProc.NFe.InfNFe.Total.ICMSTot.VFCPSTRet = 0;
+                        if (item.Imp.Icms == "ICMS51")
+                        {
+                            item.Imposto.ICMS.ICMSSN900 = new ICMSSN900Model();
+
+                            item.Imposto.ICMS.ICMSSN900.CSOSN = "900";
+                            item.Imposto.ICMS.ICMSSN900.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMSSN900.ModBC = item.Imp.ModBC;
+                            // item.imposto.ICMS.ICMSSN900.modBCST = (item.imp.modBCST == "0" || item.imp.modBCST == "") ? null : item.imp.modBCST;
+                            // item.imposto.ICMS.ICMSSN900.pMVAST = item.imp.pMVAST;
+
+                            item.Imposto.ICMS.ICMSSN900.VBC = item.Imp.VBC;
+                            // item.imposto.ICMS.ICMSSN900.vBCST = item.imp.vBCST;
+
+                            item.Imposto.ICMS.ICMSSN900.PICMS = item.Imp.PICMS.Value;
+                            // item.imposto.ICMS.ICMSSN900.pICMSST = item.imp.pICMSST;
+
+                            // item.imp.vICMS = item.imposto.ICMS.ICMSSN900.vBC / item.prod.qCom * 0.12;
+                            item.Imposto.ICMS.ICMSSN900.VICMS = item.Imp.VICMS.Value;
+                            // item.imposto.ICMS.ICMSSN900.vICMSDif = item.imp.vICMSDif.Value / item.prod.qCom;
+                            // item.imposto.ICMS.ICMSSN900.vICMSST = item.imp.vICMSST;
+
+                            // item.imposto.ICMS.ICMSSN900.pRedBC = null; // item.imp.pRedBC;
+                            // item.imposto.ICMS.ICMSSN900.vBCSTRet = item.imp.vBCSTRet;
+                            // item.imposto.ICMS.ICMSSN900.vICMSSTRet = item.imp.vICMSSTRet;
+                            // item.imposto.ICMS.ICMSSN900.vICMSSubstituto = item.imp.vICMSSubstituto;
+
+                            // item.imposto.ICMS.ICMSSN900.pDif = item.imp.pDif.Value;
+                            // item.imposto.ICMS.ICMSSN900.vICMSOp = item.imp.vICMSOp.Value;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+
+                        }
+                        else if (item.Imp.Icms == "ICMS00"
+                                || item.Imp.Icms == "ICMS20"
+                                || item.Imp.Icms == "ICMS10"
+                                || item.Imp.Icms == "ICMS40"
+                                || item.Imp.Icms == "ICMS51"
+                                || item.Imp.Icms == "ICMSSN900")
+                        {
+                            item.Imposto.ICMS.ICMSSN900 = new ICMSSN900Model();
+
+                            item.Imposto.ICMS.ICMSSN900.CSOSN = "900";
+                            item.Imposto.ICMS.ICMSSN900.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMSSN900.ModBC = item.Imp.ModBC;
+                            item.Imposto.ICMS.ICMSSN900.ModBCST = (item.Imp.ModBCST == "0" || item.Imp.ModBCST == string.Empty) ? null : item.Imp.ModBCST;
+                            item.Imposto.ICMS.ICMSSN900.PMVAST = item.Imp.PMVAST;
+
+                            item.Imposto.ICMS.ICMSSN900.VBC = item.Imp.VBC;
+                            item.Imposto.ICMS.ICMSSN900.VBCST = item.Imp.VBCST;
+
+                            item.Imposto.ICMS.ICMSSN900.PICMS = item.Imp.PICMS;
+                            item.Imposto.ICMS.ICMSSN900.PICMSST = item.Imp.PICMSST;
+
+                            item.Imposto.ICMS.ICMSSN900.VICMS = item.Imp.VICMS;
+                            item.Imposto.ICMS.ICMSSN900.VICMSST = item.Imp.VICMSST;
+
+                            item.Imposto.ICMS.ICMSSN900.PRedBC = null; // item.imp.pRedBC;
+                            item.Imposto.ICMS.ICMSSN900.VBCSTRet = item.Imp.VBCSTRet;
+                            item.Imposto.ICMS.ICMSSN900.VICMSSTRet = item.Imp.VICMSSTRet;
+                            item.Imposto.ICMS.ICMSSN900.VICMSSubstituto = item.Imp.VICMSSubstituto;
+
+                            item.Imposto.ICMS.ICMSSN900.PDif = item.Imp.PDif;
+                            item.Imposto.ICMS.ICMSSN900.VICMSOp = item.Imp.VICMSOp;
+
+                            item.Imposto.ICMS.ICMSSN900.VBCFCP = item.Imp.VBCFCP;
+                            item.Imposto.ICMS.ICMSSN900.PFCP = item.Imp.PFCP;
+                            item.Imposto.ICMS.ICMSSN900.VFCP = item.Imp.VFCP;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+
+                        }
+                        else if (item.Imp.Icms == "ICMSSN900")
+                        {
+                            item.Imposto.ICMS.ICMSSN900 = new ICMSSN900Model();
+                            item.Imposto.ICMS.ICMSSN900.CSOSN = "900";
+                            item.Imposto.ICMS.ICMSSN900.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMSSN900.ModBC = item.Imp.ModBC;
+                            item.Imposto.ICMS.ICMSSN900.ModBCST = item.Imp.ModBCST;
+
+                            item.Imposto.ICMS.ICMSSN900.VBC = item.Imp.VBC;
+                            item.Imposto.ICMS.ICMSSN900.VBCST = item.Imp.VBCST;
+
+                            item.Imposto.ICMS.ICMSSN900.PICMS = item.Imp.PICMS;
+                            item.Imposto.ICMS.ICMSSN900.PICMSST = item.Imp.PICMSST;
+
+                            item.Imposto.ICMS.ICMSSN900.VICMS = item.Imp.VICMS;
+                            item.Imposto.ICMS.ICMSSN900.VICMSST = item.Imp.VICMSST;
+
+                            item.Imposto.ICMS.ICMSSN900.PRedBC = item.Imp.PRedBC;
+                            item.Imposto.ICMS.ICMSSN900.VBCSTRet = item.Imp.VBCSTRet;
+                            item.Imposto.ICMS.ICMSSN900.VICMSSTRet = item.Imp.VICMSSTRet;
+                            item.Imposto.ICMS.ICMSSN900.VICMSSubstituto = item.Imp.VICMSSubstituto;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+                        }
+                        else if (item.Imp.Icms == "ICMSSN500" || item.Imp.Icms == "ICMS60")
+                        {
+                            item.Imposto.ICMS.ICMSSN500 = new ICMSSN500Model();
+                            item.Imposto.ICMS.ICMSSN500.CSOSN = "500";
+
+                            item.Imposto.ICMS.ICMSSN500.Orig = "0";
+                            item.Imposto.ICMS.ICMSSN500.VBC = 0;
+                            item.Imposto.ICMS.ICMSSN500.VICMS = 0;
+                            item.Imposto.ICMS.ICMSSN500.PICMS = 0;
+                            item.Imposto.ICMS.ICMSSN500.VBCSTRet = 0;
+                            item.Imposto.ICMS.ICMSSN500.PST = 0;
+                            item.Imposto.ICMS.ICMSSN500.VICMSSubstituto = 0;
+                            item.Imposto.ICMS.ICMSSN500.VICMSSTRet = 0;
+
+                            item.Imp.VBC = 0;
+                            item.Imp.VICMS = 0;
+                        }
+                        else if (item.Imp.Icms == "ICMSSN101")
+                        {
+                            item.Imposto.ICMS.ICMSSN101 = new ICMSSN101Model();
+                            item.Imposto.ICMS.ICMSSN101.CSOSN = "101";
+                            item.Imposto.ICMS.ICMSSN101.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMSSN101.PCredSN = item.Imp.PCredSN;
+                            item.Imposto.ICMS.ICMSSN101.VCredICMSSN = item.Imp.VCredICMSSN;
+
+                            item.Imposto.ICMS.ICMSSN101.VBCFCP = item.Imp.VBCFCP;
+                            item.Imposto.ICMS.ICMSSN101.PFCP = item.Imp.PFCP;
+                            item.Imposto.ICMS.ICMSSN101.VFCP = item.Imp.VFCP;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+                        }
+                        else if (item.Imp.Icms == "ICMSSN102")
+                        {
+                            item.Imposto.ICMS.ICMSSN102 = new ICMSSN102Model();
+                            item.Imposto.ICMS.ICMSSN102.CSOSN = "102";
+                            item.Imposto.ICMS.ICMSSN102.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMSSN102.PCredSN = item.Imp.PCredSN;
+                            item.Imposto.ICMS.ICMSSN102.VCredICMSSN = item.Imp.VCredICMSSN;
+
+                            // item.imposto.ICMS.ICMSSN102.vBC = item.imp.vBC;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+                        }
+                        else if (item.Imp.Icms == "ICMS90")
+                        {
+                            item.Imposto.ICMS.ICMS90 = new ICMSCSTModel();
+                            item.Imposto.ICMS.ICMS90.CST = "90";
+                            item.Imposto.ICMS.ICMS90.Orig = item.Imp.Orig;
+
+                        }
+
+                    }
+                    else
+                    {
+                        if (item.Imp.Icms == "ICMS00")
+                        {
+                            item.Imposto.ICMS.ICMS00 = new ICMSCSTModel();
+
+                            item.Imposto.ICMS.ICMS00.CST = "00";
+                            item.Imposto.ICMS.ICMS00.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMS00.ModBC = item.Imp.ModBC;
+
+                            item.Imposto.ICMS.ICMS00.VBC = item.Imp.VBC;
+
+                            item.Imposto.ICMS.ICMS00.PICMS = item.Imp.PICMS;
+
+                            item.Imposto.ICMS.ICMS00.VICMS = item.Imp.VICMS;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+
+                        }
+
+                        if (item.Imp.Icms == "ICMS20")
+                        {
+                            item.Imposto.ICMS.ICMS20 = new ICMSCSTModel();
+
+                            item.Imposto.ICMS.ICMS20.CST = "20";
+                            item.Imposto.ICMS.ICMS20.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMS20.ModBC = item.Imp.ModBC;
+
+                            item.Imposto.ICMS.ICMS20.pRedBC = item.Imp.PRedBC;
+
+                            item.Imposto.ICMS.ICMS20.VBC = item.Imp.VBC;
+
+                            item.Imposto.ICMS.ICMS20.PICMS = item.Imp.PICMS;
+
+                            item.Imposto.ICMS.ICMS20.VICMS = item.Imp.VICMS;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+
+                        }
+
+                        if (item.Imp.Icms == "ICMS40")
+                        {
+                            item.Imposto.ICMS.ICMS40 = new ICMSCSTModel();
+
+                            item.Imposto.ICMS.ICMS40.CST = "40";
+
+                            item.Imposto.ICMS.ICMS40.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMS40.ModBC = item.Imp.ModBC;
+
+                            item.Imposto.ICMS.ICMS40.VBC = item.Imp.VBC;
+
+                            item.Imposto.ICMS.ICMS40.PICMS = item.Imp.PICMS;
+
+                            item.Imposto.ICMS.ICMS40.VICMS = item.Imp.VICMS;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+
+                        }
+
+                        if (item.Imp.Icms == "ICMS41")
+                        {
+                            item.Imposto.ICMS.ICMS40 = new ICMSCSTModel();
+
+                            item.Imposto.ICMS.ICMS40.CST = "41";
+
+                            item.Imposto.ICMS.ICMS40.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMS40.ModBC = item.Imp.ModBC;
+
+                            item.Imposto.ICMS.ICMS40.VBC = item.Imp.VBC;
+
+                            item.Imposto.ICMS.ICMS40.PICMS = item.Imp.PICMS;
+
+                            item.Imposto.ICMS.ICMS40.VICMS = item.Imp.VICMS;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+
+                        }
+
+                        if (item.Imp.Icms == "ICMS51")
+                        {
+                            item.Imposto.ICMS.ICMS51 = new ICMS51Model();
+
+                            item.Imposto.ICMS.ICMS51.CST = "51";
+
+                            item.Imposto.ICMS.ICMS51.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMS51.ModBC = item.Imp.ModBC;
+
+                            item.Imposto.ICMS.ICMS51.VBC = item.Imp.VBC;
+
+                            item.Imposto.ICMS.ICMS51.PICMS = item.Imp.PICMS;
+
+                            item.Imposto.ICMS.ICMS51.VICMSDif = item.Imp.VICMSDif;
+
+                            item.Imposto.ICMS.ICMS51.VICMS = item.Imp.VICMS;
+
+                            item.Imposto.ICMS.ICMS51.VICMSOp = item.Imp.VICMSOp;
+
+                            item.Imposto.ICMS.ICMS51.PDif = item.Imp.PDif;
+
+                            item.Imposto.ICMS.ICMS51.VICMSDif = item.Imp.VICMSDif;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+
+                        }
+                        if (item.Imp.Icms == "ICMS60")
+                        {
+                            item.Imposto.ICMS.ICMS60 = new ICMSCSTModel();
+
+                            item.Imposto.ICMS.ICMS60.CST = "60";
+                            item.Imposto.ICMS.ICMS60.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMS60.ModBC = item.Imp.ModBC;
+                            item.Imposto.ICMS.ICMS60.ModBCST = (item.Imp.ModBCST == "0" || item.Imp.ModBCST == string.Empty) ? null : item.Imp.ModBCST;
+                            // item.imposto.ICMS.ICMS60.pMVAST = item.imp.pMVAST;
+
+                            item.Imposto.ICMS.ICMS60.VBC = item.Imp.VBC;
+                            item.Imposto.ICMS.ICMS60.VBCST = item.Imp.VBCST;
+
+                            item.Imposto.ICMS.ICMS60.PICMS = item.Imp.PICMS;
+                            item.Imposto.ICMS.ICMS60.PICMSST = item.Imp.PICMSST;
+
+                            item.Imposto.ICMS.ICMS60.VICMS = item.Imp.VICMS;
+                            item.Imposto.ICMS.ICMS60.VICMSST = item.Imp.VICMSST;
+
+                            // item.imposto.ICMS.ICMS60.pRedBC = null; // item.imp.pRedBC;
+                            item.Imposto.ICMS.ICMS60.VBCSTRet = item.Imp.VBCSTRet <= 0 ? null : item.Imp.VBCSTRet;
+                            item.Imposto.ICMS.ICMS60.VICMSSTRet = item.Imp.VICMSSTRet <= 0 ? null : item.Imp.VICMSSTRet;
+                            item.Imposto.ICMS.ICMS60.VICMSSubstituto = item.Imp.VICMSSubstituto <= 0 ? null : item.Imp.VICMSSubstituto;
+
+                            // item.imposto.ICMS.ICMS60.pDif = item.imp.pDif;
+                            // item.imposto.ICMS.ICMS60.vICMSOp = item.imp.vICMSOp;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+
+                        }
+
+                        if (item.Imp.Icms == "ICMS90")
+                        {
+                            item.Imposto.ICMS.ICMS90 = new ICMSCSTModel();
+
+                            item.Imposto.ICMS.ICMS90.CST = "90";
+                            item.Imposto.ICMS.ICMS90.Orig = item.Imp.Orig;
+
+                            item.Imposto.ICMS.ICMS90.ModBC = item.Imp.ModBC;
+                            item.Imposto.ICMS.ICMS90.ModBCST = (item.Imp.ModBCST == "0" || item.Imp.ModBCST == string.Empty) ? null : item.Imp.ModBCST;
+                            // item.imposto.ICMS.ICMS90.pMVAST = item.imp.pMVAST;
+
+                            item.Imposto.ICMS.ICMS90.VBC = item.Imp.VBC;
+                            item.Imposto.ICMS.ICMS90.VBCST = item.Imp.VBCST;
+
+                            item.Imposto.ICMS.ICMS90.PICMS = item.Imp.PICMS;
+                            item.Imposto.ICMS.ICMS90.PICMSST = item.Imp.PICMSST;
+
+                            item.Imposto.ICMS.ICMS90.VICMS = item.Imp.VICMS;
+                            item.Imposto.ICMS.ICMS90.VICMSST = item.Imp.VICMSST;
+
+                            // item.imposto.ICMS.ICMS90.pRedBC = null; // item.imp.pRedBC;
+                            item.Imposto.ICMS.ICMS90.VBCSTRet = item.Imp.VBCSTRet <= 0 ? null : item.Imp.VBCSTRet;
+                            item.Imposto.ICMS.ICMS90.VICMSSTRet = item.Imp.VICMSSTRet <= 0 ? null : item.Imp.VICMSSTRet;
+                            item.Imposto.ICMS.ICMS90.VICMSSubstituto = item.Imp.VICMSSubstituto <= 0 ? null : item.Imp.VICMSSubstituto;
+
+                            // item.imposto.ICMS.ICMS90.pDif = item.imp.pDif;
+                            // item.imposto.ICMS.ICMS90.vICMSOp = item.imp.vICMSOp;
+
+                            if (item.Imp.VBCST != null)
+                                _vBCST += item.Imp.VBCST.Value;
+
+                            if (item.Imp.VICMSST != null)
+                                _vST += item.Imp.VICMSST.Value;
+
+                        }
+                    }
+
+                    // if ()
+                    // {
+                    //     item.imposto.ICMS.ICMS20 = new ICMSCSTModel();
+
+                    //     item.imposto.ICMS.ICMS20.CST = "20";
+                    //     item.imposto.ICMS.ICMS20.vBC = item.imp.vBC;
+                    //     item.imposto.ICMS.ICMS20.modBC = item.imp.modBC;
+                    //     item.imposto.ICMS.ICMS20.orig = item.imp.orig;
+                    //     item.imposto.ICMS.ICMS20.pICMS = item.imp.pICMS;
+                    //     // item.imposto.ICMS.ICMS20.pRedBC = "";
+                    //     item.imposto.ICMS.ICMS20.vICMS = item.imp.vICMS;
+
+                    // }
+
+                    if (item.Imp.Icms != "ICMSSN102")
+                    {
+                        if (item.Imp.VBC != null)
+                            _vBC += item.Imp.VBC.Value;
+
+                        if (item.Imp.VICMS != null)
+                            _vICMS += item.Imp.VICMS.Value;
+                    }
+
+                    item.Imposto.VTotTrib = _vICMS;
+
+                    _vTotTrib += item.Imposto.VTotTrib;
+
+                    // item.Imposto.IPI = null;
+                    //item.Imp.Ipi = null;
+                    if (item.Imp.Ipi != null)
+                    {
+                        item.Imposto.IPI = new Core.BC.Domain.Entities.invoice.IPIModel();
+                        item.Imposto.IPI.CEnq = item.Imp.Ipi.CEnq;
+
+                        // item.Imp.Ipi.IpiTrib = null;
+                        if (item.Imp.Ipi.IpiTrib != null)
+                        {
+                            if (item.Imp.Ipi.IpiTrib.PIPI == 0)
+                            {
+                                item.Imposto.IPI = null;
+                            }
+                            else
+                            {
+                                item.Imposto.IPI.IPITrib = new Core.BC.Domain.Entities.invoice.IPITribModel();
+                                item.Imposto.IPI.IPITrib.CST = item.Imp.Ipi.IpiTrib.Cst;
+                                if (item.Imp.Ipi.IpiTrib.PIPI != null && item.Imp.Ipi.IpiTrib.PIPI != null && item.Imp.Ipi.IpiTrib.PIPI > 0)
+                                    item.Imposto.IPI.IPITrib.PIPI = item.Imp.Ipi.IpiTrib.PIPI?.ToString();
+                                if (item.Imp.Ipi.IpiTrib.VBC != null && item.Imp.Ipi.IpiTrib.VBC != null && item.Imp.Ipi.IpiTrib.VBC > 0)
+                                    item.Imposto.IPI.IPITrib.VBC = item.Imp.Ipi.IpiTrib.VBC?.ToString();
+                                if (item.Imp.Ipi.IpiTrib.VIPI != null && item.Imp.Ipi.IpiTrib.VIPI != null && item.Imp.Ipi.IpiTrib.VIPI > 0)
+                                    item.Imposto.IPI.IPITrib.VIPI = item.Imp.Ipi.IpiTrib.VIPI == 0 ? null : item.Imp.Ipi.IpiTrib.VIPI;
+                                _vIPI += item.Imp.Ipi.IpiTrib.VIPI.Value;
+                            }
+                        }
+
+                        if (item.Imp.Ipi.Ipint != null)
+                        {
+                            item.Imposto.IPI.IPINT = new Core.BC.Domain.Entities.invoice.IPITribModel();
+                            item.Imposto.IPI.IPINT.CST = item.Imp.Ipi.Ipint.Cst;
+                        }
+
+                    }
+
+                    item.Imposto.PIS = null;
+                    item.Imp.Pis = null; // apagar
+                    if (item.Imp.Pis != null)
+                    {
+                        item.Imposto.PIS = new PISModel();
+
+                        if (item.Imp.Pis.PisAliq != null && item.Imposto.ICMS.ICMSSN500 == null)
+                        {
+                            item.Imposto.PIS.PISAliq = new PISAliqModel();
+                            item.Imposto.PIS.PISAliq.CST = item.Imp.Pis.PisAliq.Cst;
+                            item.Imposto.PIS.PISAliq.PPIS = item.Imp.Pis.PisAliq.PPIS == 0 ? null : item.Imp.Pis.PisAliq.PPIS;
+                            item.Imposto.PIS.PISAliq.VBC = item.Imp.Pis.PisAliq.VBC == 0 ? null : item.Imp.Pis.PisAliq.VBC;
+                            item.Imposto.PIS.PISAliq.VPIS = item.Imp.Pis.PisAliq.VPIS == 0 ? null : item.Imp.Pis.PisAliq.VPIS;
+
+                            _vPIS += item.Imp.Pis.PisAliq.VPIS.Value;
+                        }
+
+                        if (item.Imp.Pis.Pisnt != null)
+                        {
+                            item.Imposto.PIS.PISNT = new PISAliqModel();
+                            item.Imposto.PIS.PISNT.CST = item.Imp.Pis.Pisnt.Cst;
+                        }
+
+                        if (item.Imposto.ICMS.ICMSSN500 != null || item.Imposto.ICMS.ICMSSN101 != null || item.Imposto.ICMS.ICMSSN102 != null)
+                        {
+                            item.Imposto.PIS.PISNT = new PISAliqModel();
+                            item.Imposto.PIS.PISNT.CST = "07";
+                        }
+
+                        if (item.Imp.Pis.PisAliq == null && item.Imp.Pis.Pisnt == null)
+                        {
+                            item.Imposto.PIS.PISNT = new PISAliqModel();
+                            item.Imposto.PIS.PISNT.CST = "07";
+                        }
+                    }
+                    else
+                    {
+                        item.Imposto.PIS = new PISModel();
+                        item.Imposto.PIS.PISAliq = null;
+                        item.Imposto.PIS.PISNT = new PISAliqModel();
+                        item.Imposto.PIS.PISNT.CST = "04";
+                    }
+
+                    item.Imposto.COFINS = null;
+                    item.Imp.Cofins = null; // apagar
+                    if (item.Imp.Cofins != null)
+                    {
+                        item.Imposto.COFINS = new COFINSModel();
+
+                        if (item.Imp.Cofins.CofinsAliq != null && item.Imposto.ICMS.ICMSSN500 == null)
+                        {
+                            item.Imposto.COFINS.COFINSAliq = new COFINSAliqModel();
+                            item.Imposto.COFINS.COFINSAliq.CST = item.Imp.Cofins.CofinsAliq.Cst;
+                            item.Imposto.COFINS.COFINSAliq.PCOFINS = item.Imp.Cofins.CofinsAliq.PCOFINS;
+                            item.Imposto.COFINS.COFINSAliq.VBC = item.Imp.Cofins.CofinsAliq.VBC;
+                            item.Imposto.COFINS.COFINSAliq.VCOFINS = item.Imp.Cofins.CofinsAliq.VCOFINS;
+                            _vCOFINS += item.Imp.Cofins.CofinsAliq.VCOFINS.Value;
+                        }
+                        else
+                        {
+                            item.Imp.Cofins.CofinsAliq = null;
+                            // item.imp.cofins.cofinsnt = null;
+                        }
+
+                        if (item.Imp.Cofins.Cofinsnt != null)
+                        {
+                            item.Imposto.COFINS.COFINSNT = new COFINSAliqModel();
+                            item.Imposto.COFINS.COFINSNT.CST = item.Imp.Cofins.Cofinsnt.Cst;
+                        }
+
+                        if (item.Imposto.ICMS.ICMSSN500 != null || item.Imposto.ICMS.ICMSSN101 != null || item.Imposto.ICMS.ICMSSN102 != null)
+                        {
+                            item.Imposto.COFINS.COFINSNT = new COFINSAliqModel();
+                            item.Imposto.COFINS.COFINSNT.CST = "07";
+                        }
+
+                        if (item.Imp.Cofins.CofinsAliq == null && item.Imp.Cofins.Cofinsnt == null)
+                        {
+                            item.Imposto.COFINS.COFINSNT = new COFINSAliqModel();
+                            item.Imposto.COFINS.COFINSNT.CST = "07";
+                        }
+                    }
+                    else
+                    {
+                        item.Imposto.COFINS = new COFINSModel();
+                        item.Imposto.COFINS.COFINSAliq = null;
+                        item.Imposto.COFINS.COFINSNT = new COFINSAliqModel();
+                        item.Imposto.COFINS.COFINSNT.CST = "04";
+                    }
+                    item.Selected = null;
+                    item.Imp = null;
+                }
+            }
+
+            if (cmd.InfNFe.InfAdic != null && cmd.InfNFe.InfAdic.InfCpl != null)
+                cmd.InfNFe.InfAdic.InfCpl = cmd.InfNFe.InfAdic.InfCpl.Trim();
+            cmd.InfNFe.Total.ICMSTot.VBC = _vBC;
+            cmd.InfNFe.Total.ICMSTot.VICMS = _vICMS;
+            // cmd.InfNFe.total.ICMSTot.vICMSDeson = _nfeImport.nfeProc.NFe.infNFe.total.ICMSTot.vICMSDeson;
+            cmd.InfNFe.Total.ICMSTot.VICMSDeson = 0;
+            cmd.InfNFe.Total.ICMSTot.VFCP = _nfeImport.NfeProc.NFe.InfNFe.Total.ICMSTot.VFCP;
+            cmd.InfNFe.Total.ICMSTot.VBCST = _vBCST;
+            cmd.InfNFe.Total.ICMSTot.VST = _vST;
+            cmd.InfNFe.Total.ICMSTot.VFCPST = _nfeImport.NfeProc.NFe.InfNFe.Total.ICMSTot.VFCPST;
+            cmd.InfNFe.Total.ICMSTot.VFCPSTRet = _nfeImport.NfeProc.NFe.InfNFe.Total.ICMSTot.VFCPSTRet;
+            cmd.InfNFe.Total.ICMSTot.VProd = _vProd;
+            cmd.InfNFe.Total.ICMSTot.VFrete = _vFRETE;
+            cmd.InfNFe.Total.ICMSTot.VSeg = 0;//_nfeImport.nfeProc.NFe.infNFe.total.ICMSTot.vSeg;
+            cmd.InfNFe.Total.ICMSTot.VDesc = _vDesconto;
+            cmd.InfNFe.Total.ICMSTot.VII = _nfeImport.NfeProc.NFe.InfNFe.Total.ICMSTot.VII;
+            cmd.InfNFe.Total.ICMSTot.VIPI = _vIPI;
+            cmd.InfNFe.Total.ICMSTot.VIPIDevol = _nfeImport.NfeProc.NFe.InfNFe.Total.ICMSTot.VIPIDevol;
+            cmd.InfNFe.Total.ICMSTot.VPIS = _vPIS;
+            cmd.InfNFe.Total.ICMSTot.VCOFINS = _vCOFINS;
+            cmd.InfNFe.Total.ICMSTot.VOutro = _vOutro;
+            cmd.InfNFe.Total.ICMSTot.VNF = _vProd + _vFRETE + _vIPI + cmd.InfNFe.Total.ICMSTot.VST + _vOutro - _vDesconto;
+            cmd.InfNFe.Total.ICMSTot.VTotTrib = _vTotTrib;
+
+            cmd.InfNFe.Entrega = new EntregaModel();
+            cmd.InfNFe.Entrega.CNPJ = cmd.InfNFe.Dest.CNPJ;
+            cmd.InfNFe.Entrega.UF = cmd.InfNFe.Dest.EnderDest.UF;
+            cmd.InfNFe.Entrega.CMun = cmd.InfNFe.Dest.EnderDest.CMun;
+            cmd.InfNFe.Entrega.Nro = cmd.InfNFe.Dest.EnderDest.Nro;
+            cmd.InfNFe.Entrega.XBairro = cmd.InfNFe.Dest.EnderDest.XBairro;
+            cmd.InfNFe.Entrega.XLgr = cmd.InfNFe.Dest.EnderDest.XLgr;
+            cmd.InfNFe.Entrega.XMun = cmd.InfNFe.Dest.EnderDest.XMun;
+
+            if (cmd.InfNFe.Transp.ModFrete == "9")
+            {
+                cmd.InfNFe.Transp.Transporta = null;
+                cmd.InfNFe.Transp.Vol = null;
+            }
+            else
+            {
+                cmd.InfNFe.Transp.Transporta.UF = cmd.InfNFe?.Transp?.Transporta?.UF?.ToUpper();
+            }
+
+            // cmd.InfNFe.cobr = null;
+
+            // cmd.InfNFe.pag = new pagModel;
+
+            // cmd.InfNFe.infRespTec = null;
+            // this.InfNFe.pag.detPag = [];
+            // this.InfNFe.pag.detPag.push(dtpg);
+
+            var _r = await _externalApi.Nfe(new NfeModel() { InfNfe = cmd.InfNFe, Official = true });
+            if (_r != null)
+            {
+                cmd.Invoice.NfeXml = _r.XmlSend;
+                if (!_r.Status.ToLower().Equals("error"))
+                {
+                    cmd.Invoice.Type = "PURCHASE";
+                    cmd.Invoice.TalaodenotasNFeUid = _r.Uid;
+                    cmd.Invoice.NfeProt = _r.XmlProtocol;
+                    cmd.Invoice.businessUid = Guid.Parse(user.ipRemote);
+                    cmd.Invoice.DocNFe = _business.NfeLast;
+                    cmd.Invoice.NfebusinessUid = cmd.Invoice.businessUid;
+
+                    cmd.Invoice.updatedPersonUid = user.personUid;
+                    cmd.Invoice.updatedAt = DateTime.Now;
+
+                    _repository.Save(cmd.Invoice);
+                    await _repository.CommitChanges();
+                }
+                else
+                {
+                    var _return = new XmlDocument();
+                    _return.LoadXml($"<retorno>{_r.XmlReturn.Replace("<?xml version=\"1.0\" encoding=\"utf-8\"?>", string.Empty).Replace("<?xml version='1.0' encoding='UTF-8'?>", string.Empty)}</retorno>");
+                    await bus.Raise(Notification.CreateError("Title", _return.GetElementsByTagName("xMotivo")[1].InnerXml));
+                    return false;
+                }
+            }
+            else
+            {
+                await bus.Raise(Notification.CreateError("Title", _externalApi.Error.Errors.Title.FirstOrDefault()));
+                return false;
+            }
+
+            return true;
+
+        }
+
+        public async Task<List<Core.BC.Domain.Entities.cfop.CfopModel>> GetCFOP()
+        {
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+            var _listCFOPS = await _extrenalApi.GetCFOP();
+
+            var _r = new List<Core.BC.Domain.Entities.cfop.CfopModel>();
+            if (_listCFOPS != null)
+                foreach (var item in _listCFOPS)
+                {
+                    _r.Add(new Core.BC.Domain.Entities.cfop.CfopModel
+                    {
+                        Name = item.Name,
+                        Description = item.Description,
+                        Application = item.Application
+                    });
+                }
+
+            return _r;
+        }
+
+        public async Task<List<Core.BC.Domain.Entities.invoice.TruckageModel>> GetTruckage()
+        {
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+            var _listTruckage = await _extrenalApi.GetTruckage();
+
+            var _r = new List<Core.BC.Domain.Entities.invoice.TruckageModel>();
+
+            if (_listTruckage != null)
+                foreach (var item in _listTruckage)
+                {
+                    _r.Add(new Core.BC.Domain.Entities.invoice.TruckageModel
+                    {
+                        Name = item.Name,
+                        Description = item.Description,
+                    });
+                }
+
+            return _r;
+        }
+
+        public async Task<List<Core.BC.Domain.Entities.invoice.NatureOperationModel>> GetNatureOperation()
+        {
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+            var _listNatureOperaion = await _extrenalApi.GetNatureOperation();
+
+            var _r = new List<Core.BC.Domain.Entities.invoice.NatureOperationModel>();
+
+            if (_listNatureOperaion != null)
+                foreach (var item in _listNatureOperaion)
+                {
+                    _r.Add(new Core.BC.Domain.Entities.invoice.NatureOperationModel
+                    {
+                        Name = item.Name,
+                        Description = item.Description
+                    });
+                }
+
+            return _r;
+        }
+
+        public async Task<List<Core.BC.Domain.Entities.invoice.TaxSpecialModel>> GetTaxSpecial()
+        {
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+            var _listTaxSpecial = await _extrenalApi.GetTaxSpecial();
+
+            var _r = new List<Core.BC.Domain.Entities.invoice.TaxSpecialModel>();
+
+            if (_listTaxSpecial != null)
+                foreach (var item in _listTaxSpecial)
+                {
+                    _r.Add(new Core.BC.Domain.Entities.invoice.TaxSpecialModel
+                    {
+                        Name = item.Name,
+                        Description = item.Description
+                    });
+                }
+
+            return _r;
+        }
+
+        public async Task<InvoiceSearch> GetTalaoDeNotasNfe(Guid cmd)
+        {
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+            var _nfe = await _extrenalApi.GetNfeUid(cmd);
+
+            var _r = new InvoiceSearch
+            {
+                Uid = _nfe.Uid,
+                Name = _nfe.DestName,
+                DateNf = _nfe.InsertedAt.Value,
+                ReturnNf = _nfe.XmlReturn,
+                Number = _nfe.NumberNf,
+                Protocolo = _nfe.XmlProtocol,
+                Status = _nfe.Status,
+                Total = _nfe.Total,
+                XmlSend = _nfe.XmlSend,
+                XmlProc = _nfe.XmlProc,
+                Events = new List<Events>()
+            };
+
+            foreach (var item in _nfe.NfeEvents.OrderByDescending(x => x.InsertedAt))
+            {
+                _r.Events.Add(new Events
+                {
+                    NfeUid = item.NfeUid,
+                    Status = item.Status,
+                    XmlSend = item.XmlSend,
+                    XmlReturn = item.XmlReturn,
+                    Number = item.Number,
+                    Uid = item.Uid,
+                    InsertedAt = item.InsertedAt,
+                    InsertedPersonUid = item.InsertedPersonUid,
+                    Commited = item.Commited,
+                    IsActive = item.IsActive,
+                    IsRemoved = item.IsActive,
+                });
+            }
+
+            return _r;
+        }
+
+        public async Task<StatusModel> NfeStatus(Guid cmd)
+        {
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+            var _nfe = await _extrenalApi.NfeStatus(cmd).ConfigureAwait(false);
+
+            return _nfe;
+        }
+
+        public async Task<StatusModel> NfseStatus(Guid cmd)
+        {
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+            var _nfe = await _extrenalApi.NfseStatus(cmd);
+
+            if (_nfe?.XmlProtocol?.Length == 50)
+            {
+                var _t = this._repository.Get().Where(x => x.TalaodenotasNFSeUid == cmd).FirstOrDefault();
+                _t.DocNFSe = int.Parse(_nfe.XmlProtocol.Substring(25, 11).TrimStart('0'));
+                this._repository.Save(_t);
+                await this._repository.CommitChanges().ConfigureAwait(false);
+            }
+
+            return _nfe;
+        }
+
+        public async Task<Core.BC.Domain.Entities.invoice.NfeImport> ReadXml(Core.BC.Domain.Entities.invoice.File p)
+        {
+            try
+            {
+
+                // var items = this.repository
+                //     .Get()
+                //     .Where(x => x.Type == "purchase"
+                //                 && x.Total == 0
+                //                 && x.removedAt == null
+                //                 // && x.businessUid == Guid.Parse("cec42bc8-81cb-437f-9363-f0e0c0a21f97")
+                //                 && !string.IsNullOrEmpty(x.Danfe))
+                //     .AsAsyncEnumerable();
+
+                // await foreach (var item in items.ConfigureAwait(false))
+                // {
+                //     try
+                //     {
+                //         using var doc = JsonDocument.Parse(item.Danfe);
+
+                //         var root = doc.RootElement;
+
+                //         var vNFProp = root
+                //             .GetProperty("nfeProc")
+                //             .GetProperty("nFe")
+                //             .GetProperty("infNFe")
+                //             .GetProperty("total")
+                //             .GetProperty("icmsTot")
+                //             .GetProperty("vNF");
+
+                //         // vNF pode vir como número ou string
+                //         decimal total = 0;
+                //         if (vNFProp.ValueKind == JsonValueKind.Number)
+                //         {
+                //             total = vNFProp.GetDecimal();
+                //         }
+                //         else if (decimal.TryParse(vNFProp.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
+                //         {
+                //             total = parsed;
+                //         }
+
+                //         if (total > 0)
+                //         {
+                //             item.Total = total;
+                //             this.repository.Save(item);
+                //         }
+                //     }
+                //     catch (Newtonsoft.Json.JsonException)
+                //     {
+                //         // JSON inválido → ignora
+                //         continue;
+                //     }
+                //     catch (Exception ex)
+                //     {
+                //         // logar exceções inesperadas
+                //         continue;
+                //     }
+                // }
+
+                // await this.repository.CommitChanges().ConfigureAwait(false);
+
+                var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+                var _nfeImport = await _extrenalApi.ReadXml(new externalApi.talaodenotas.entities.File
+                {
+                    Base64 = p.Base64
+                });
+
+                var _rtn = JsonConvert.DeserializeObject<Core.BC.Domain.Entities.invoice.NfeImport>(_nfeImport);
+                _rtn.Danfe = _nfeImport;
+                var products = _repositoryProduct.Get().Where(x => x.removedAt == null && x.ParentbusinessUid.Equals(new Guid(user.ipRemote)));
+
+                foreach (var item in _rtn.NfeProc.NFe.InfNFe.Det)
+                {
+                    item.Prod.ProductName = item.Prod.XProd.ToUpper();
+                    var product = products
+                                        .Where(x => x.CodeManufacturer.ToLower() == item.Prod.CProd.ToLower() && x.removedAt == null)
+                                        .FirstOrDefault();
+                    if (product != null)
+                    {
+                        item.Product = product;
+                        item.Prod.StorageUid = product.StorageUid;
+                    }
+                }
+
+                return _rtn;
+            }
+            catch (Exception Ex)
+            { return null; }
+        }
+
+        public async Task<Core.BC.Domain.Entities.invoice.NfeImport> ReadXml(string p)
+        {
+            try
+            {
+
+                var _xml = await this.DownloadNfeXML(p);
+
+                string base64String = ConvertStreamToBase64(_xml);
+
+                var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+                var _nfeImport = await _extrenalApi.ReadXml(new externalApi.talaodenotas.entities.File
+                {
+                    Base64 = base64String
+                });
+
+                var _rtn = JsonConvert.DeserializeObject<Core.BC.Domain.Entities.invoice.NfeImport>(_nfeImport);
+                _rtn.Danfe = _nfeImport;
+                var products = _repositoryProduct.Get().Where(x => x.removedAt == null && x.ParentbusinessUid.Equals(new Guid(user.ipRemote)));
+
+                foreach (var item in _rtn.NfeProc.NFe.InfNFe.Det)
+                {
+                    item.Prod.ProductName = item.Prod.XProd.ToUpper();
+                    var product = products
+                                        .Where(x => x.CodeManufacturer.ToLower() == item.Prod.CProd.ToLower() && x.removedAt == null)
+                                        .FirstOrDefault();
+                    if (product != null)
+                    {
+                        item.Product = product;
+                        item.Prod.StorageUid = product.StorageUid;
+                    }
+                }
+
+                return _rtn;
+            }
+            catch (Exception Ex)
+            { return null; }
+        }
+
+        public async Task<bool> SaveDone(Guid uid)
+        {
+            var _invoice = _repository.Get().Where(x => x.uid.Value == uid).FirstOrDefault();
+
+            _invoice.Done = true;
+            _invoice.updatedAt = DateTime.Now;
+            _invoice.updatedPersonUid = user.personUid;
+
+            _repository.Save(_invoice);
+            await _repository.CommitChanges();
+            return true;
+        }
+
+        public async Task<bool> SaveDoneNfse(Guid uid)
+        {
+            var _invoice = _repository.Get().Where(x => x.uid.Value == uid).FirstOrDefault();
+
+            _invoice.DoneNfse = true;
+            _invoice.updatedAt = DateTime.Now;
+            _invoice.updatedPersonUid = user.personUid;
+
+            _repository.Save(_invoice);
+            await _repository.CommitChanges();
+            return true;
+        }
+
+        public async Task<bool> DeleteXml(Guid uid)
+        {
+            var _invoice = _repository.Get().Where(x => x.uid.Value == uid).FirstOrDefault();
+
+            //if (_invoice.invoiceDate.Month != DateTime.Now.Month || _invoice.invoiceDate.Year != DateTime.Now.Year)
+            //{
+            //    await bus.Raise(Notification.CreateError("Title", "Nota não pode ser estornada."));
+            //    return false;
+            //}
+
+            foreach (var item in _repositoryInvoiceParcel.Get().Where(x => x.InvoiceUid == _invoice.uid))
+            {
+                item.removedAt = DateTime.Now;
+                item.updatedPersonUid = user.personUid;
+                _repositoryInvoiceParcel.Save(item);
+            }
+
+            var _rtn = JsonConvert.DeserializeObject<Core.BC.Domain.Entities.invoice.NfeImport>(_invoice.Danfe);
+
+            var products = _repositoryProduct.Get().Where(x => x.uid.Equals(new Guid(user.ipRemote)) || x.ParentbusinessUid.Equals(new Guid(user.ipRemote)));
+
+            foreach (var item in _rtn.NfeProc.NFe.InfNFe.Det)
+            {
+                var product = products.Where(x => x.CodeManufacturer.ToLower() == item.Prod.CProd.ToLower()).FirstOrDefault();
+                if (product != null)
+                {
+                    product.Storage = product.Storage - item.Prod.QCom;
+                    product.updatedAt = DateTime.Now;
+                    product.updatedPersonUid = user.personUid;
+                    _repositoryProduct.Save(product);
+                }
+            }
+
+            _invoice.removedAt = DateTime.Now;
+            _invoice.updatedPersonUid = user.personUid;
+
+            _repository.Save(_invoice);
+
+            await _repository.CommitChanges();
+
+            return true;
+        }
+        /// <summary>
+        ///  Cancelar Nfe
+        /// </summary>
+        /// <param name="cmd"></param>
+        /// <returns></returns>
+        public async Task<InvoiceModel> CancelNfe(Guid cmd)
+        {
+
+            var _invoice = _repository.Get()
+                .Where(x => x.TalaodenotasNFeUid.Value == cmd)
+                .FirstOrDefault();
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _nfeInf = await _externaApi.NfeStatus(cmd);
+
+            var _doc = new XmlDocument();
+            _doc.LoadXml(_nfeInf.XmlProc);
+
+            var _evento = new EventoCommand();
+
+            var tpAmb = _doc.GetElementsByTagName("tpAmb");
+            _evento.TpAmb = tpAmb[0].InnerText;
+
+            _evento.TpEvento = "110111"; // cancelamento
+            _evento.ChNFe = _nfeInf.XmlProtocol;
+            _evento.CNPJ = _nfeInf.CnpjCpf; // _invoice.business.cnpjCpf;
+            _evento.DetEvento = new DetEventoModel();
+
+            var nProt = _doc.GetElementsByTagName("nProt");
+            _evento.DetEvento.NProt = nProt[0].InnerText;
+            _evento.DetEvento.DescEvento = "Cancelamento";
+            _evento.DetEvento.XJust = "Cancelamento de NFe";
+
+            var _r = await _externaApi.NfeEvento(_evento);
+
+            if (_r && _invoice != null)
+            {
+                _invoice.TalaodenotasNFeUid = null;
+                _invoice.DocNFe = 0;
+                _invoice.Done = false;
+                _invoice.updatedAt = DateTime.Now;
+                _invoice.updatedPersonUid = user.personUid;
+                _repository.Save(_invoice);
+                await _repository.CommitChanges();
+            }
+
+            return _invoice;
+        }
+
+        public async Task<InvoiceModel> CancelNfce(Guid cmd)
+        {
+
+            var _invoice = _repository
+                                .Get()
+                                .Include(x => x.Business)
+                                .Where(x => x.TalaodenotasNFCeUid.Value == cmd)
+                                .FirstOrDefault();
+
+            if (_invoice.Business.Nfce)
+            {
+                var _externaApi = new externalApi.talaodenotas.services.Services();
+
+                var _nfeInf = await _externaApi.NfceEvento(_invoice.TalaodenotasNFCeUid.Value);
+
+                if (_nfeInf && _invoice != null)
+                {
+                    _invoice.TalaodenotasNFCeUid = null;
+                    _invoice.DocNFCe = 0;
+                    _invoice.TalaodenotasNFCeDate = null;
+                    _invoice.updatedAt = DateTime.Now;
+                    _invoice.updatedPersonUid = user.personUid;
+                    // _invoice.removedAt = DateTime.Now;
+                    _repository.Save(_invoice);
+
+                }
+            }
+            else
+            {
+                _invoice.TalaodenotasNFCeUid = null;
+                _invoice.DocNFCe = 0;
+                _invoice.TalaodenotasNFCeDate = null;
+                _invoice.updatedAt = DateTime.Now;
+                _invoice.updatedPersonUid = user.personUid;
+                // _invoice.removedAt = DateTime.Now;
+                _repository.Save(_invoice);
+            }
+
+            // var _order = this._repositoryOrder
+            //                             .Get()
+            //                             .Where(x => x.uid == _invoice.orderUid)
+            //                             .FirstOrDefault();
+            // if (_order != null)
+            // {
+            //     // _order.removedAt = DateTime.Now;
+            //     this._repositoryOrder.Save(_order);
+            // }
+
+            await _repository.CommitChanges();
+
+            return _invoice;
+        }
+
+        public async Task<InvoiceModel> LetterNfe(NfeLetterModel cmd)
+        {
+
+            var _invoice = _repository.Get()
+                .Where(x => x.TalaodenotasNFeUid.Value == cmd.Uid).FirstOrDefault();
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _nfeInf = await _externaApi.NfeStatus(cmd.Uid);
+
+            var _doc = new XmlDocument();
+            _doc.LoadXml(_nfeInf.XmlProc);
+
+            var _evento = new EventoCommand();
+
+            var tpAmb = _doc.GetElementsByTagName("tpAmb");
+            _evento.TpAmb = tpAmb[0].InnerText;
+
+            _evento.TpEvento = "110110"; // Carta de correcao
+            _evento.ChNFe = _nfeInf.XmlProtocol;
+            _evento.CNPJ = _nfeInf.CnpjCpf;
+            _evento.DetEvento = new DetEventoModel();
+
+            var nProt = _doc.GetElementsByTagName("nProt");
+            _evento.DetEvento.NProt = nProt[0].InnerText;
+            _evento.DetEvento.XCorrecao = cmd.Descricao;
+            _evento.DetEvento.XJust = cmd.Justificativa;
+
+            var _r = await _externaApi.NfeEvento(_evento);
+
+            if (_r)
+            {
+                //_invoice.talaodenotasNFeUid = null;
+                //_invoice.updatedAt = DateTime.Now;
+                //_invoice.updatedPersonUid = user.personUid;
+                //this._repository.Save(_invoice);
+                //await this._repository.CommitChanges();
+            }
+
+            return _invoice;
+        }
+
+        public async Task<InvoiceModel> CancelNfse(Guid cmd)
+        {
+
+            var _invoice = _repository.Get()
+                .Where(x => x.TalaodenotasNFSeUid.Value == cmd)
+                .FirstOrDefault();
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _nfseInf = await _externaApi.NfseStatus(cmd);
+
+            var _doc = new XmlDocument();
+            _doc.LoadXml($"<root>{_nfseInf.XmlProc}</root>");
+
+            var _business = this._repositoryBusinessModel
+                        .Get()
+                        .Where(x => x.uid.Value == user.businessUid && x.removedAt == null && x.NfseNational)
+                        .FirstOrDefault();
+
+            if (_business == null)
+            {
+                var _evento = new NfseEventoModel();
+
+                _evento.Uid = cmd;
+
+                if (_nfseInf.XmlProtocol.Count() != 36)
+                {
+
+                    _evento.CodigoCancelamento = "MC01";
+                    _evento.Protocolo = _nfseInf.XmlProtocol;
+                    _evento.IdentificacaoNfse = new IdentificacaoNfseModel();
+
+                    var cnpj = _doc.GetElementsByTagName("Cnpj");
+                    _evento.IdentificacaoNfse.Cnpj = cnpj[0].InnerText;
+
+                    var number = _doc.GetElementsByTagName("Numero");
+                    _evento.IdentificacaoNfse.Numero = number[0].InnerText;
+
+                    var im = _doc.GetElementsByTagName("InscricaoMunicipal");
+                    _evento.IdentificacaoNfse.InscricaoMunicipal = im[0].InnerText;
+
+                    var codigoMunicipio = _doc.GetElementsByTagName("CodigoMunicipio");
+                    _evento.IdentificacaoNfse.CodigoMunicipio = codigoMunicipio[0].InnerText;
+                }
+
+                var _r = await _externaApi.NfseEvento(_evento);
+
+                if (_r)
+                {
+                    _invoice.TalaodenotasNFSeUid = null;
+                    _invoice.DocNFSe = 0;
+                    _invoice.updatedAt = DateTime.Now;
+                    _invoice.updatedPersonUid = user.personUid;
+                    _repository.Save(_invoice);
+                    await _repository.CommitChanges();
+                }
+
+            }
+            else
+            {
+
+                var _evento = new NfseEventEntity();
+
+                _evento.Uid = cmd;
+
+                _evento.Cnpj = _business.CnpjCpf;
+                _evento.ChNFe = _nfseInf.XmlProtocol;
+
+                var _r = await _externaApi.NfseEvent(_evento);
+
+                if (_r == null)
+                {
+                    await bus.Raise(Notification.CreateError("Title", _externaApi.Error.Errors.Title.FirstOrDefault()));
+                    return null;
+                }
+                else
+                {
+                    _invoice.TalaodenotasNFSeUid = null;
+                    _invoice.DocNFSe = 0;
+                    _invoice.updatedAt = DateTime.Now;
+                    _invoice.updatedPersonUid = user.personUid;
+                    _repository.Save(_invoice);
+                    await _repository.CommitChanges();
+                }
+            }
+
+            return _invoice;
+        }
+
+        public async Task<bool> TalaodenotasNfe(Guid uid)
+        {
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+            var _nfe = await _extrenalApi.NfeStatus(uid);
+
+            var _invoice = _repository.Get().Where(x => x.NfeProt == _nfe.XmlProtocol).FirstOrDefault();
+
+            if (_nfe.Status.ToLower().Equals("error"))
+            {
+                _invoice.Done = false;
+                _invoice.NfeXml = string.Empty;
+                _invoice.TalaodenotasNFeUid = null;
+                _invoice.TalaodenotasNFeDate = null;
+                _invoice.DocNFSe = 0;
+            }
+            else if (_nfe.Status.ToLower().Equals("done"))
+            {
+                _invoice.Done = true;
+                _invoice.TalaodenotasNFeUid = _nfe.uid;
+                _invoice.TalaodenotasNFeDate = _nfe.insertedAt;
+                _invoice.NfeXml = _nfe.XmlSend;
+            }
+            return true;
+        }
+
+        public async Task<bool> TalaodenotasNfse(Guid uid)
+        {
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+            var _nfe = await _extrenalApi.NfseStatus(uid);
+
+            var _invoice = this._repository
+                            .Get()
+                            .Where(x => x.TalaodenotasNFSeUid.Value == uid)
+                            .FirstOrDefault();
+
+            _invoice.TalaodenotasNFeDate = _nfe.insertedAt;
+
+            if (_nfe.Status.ToLower().Equals("error"))
+            {
+                _invoice.DoneNfse = false;
+                _invoice.NfseXml = string.Empty;
+                _invoice.TalaodenotasNFSeUid = null;
+                _invoice.TalaodenotasNFSeDate = null;
+            }
+            else if (_nfe.Status.ToLower().Equals("done"))
+            {
+
+                var _doc = new XmlDocument();
+                _doc.LoadXml($"<root>{_nfe.XmlProc}</root>");
+
+                XmlNodeList tpNumber;
+
+                if (_doc.GetElementsByTagName("Numero").Count > 0)
+                    tpNumber = _doc.GetElementsByTagName("Numero");
+                else
+                    tpNumber = _doc.GetElementsByTagName("nNFS-e");
+
+                long number = 0;
+                try
+                {
+                    number = long.Parse(tpNumber[0].InnerText);
+                }
+                catch { number = 0; }
+
+                _invoice.DoneNfse = true;
+                if (number > 0)
+                    _invoice.DocNFSe = number;
+                _invoice.TalaodenotasNFSeUid = uid;
+                _invoice.TalaodenotasNFSeDate = _nfe.insertedAt;
+                _invoice.NfseXml = $"<root>{_nfe.XmlProc}</root>";
+            }
+
+            this._repository.Save(_invoice);
+            await this._repository.CommitChanges();
+
+            return true;
+        }
+
+        public async Task<ResponsePaginated<List<InvoiceSearch>>> SearchTalaoNfe(InvoiceListCommand cmd)
+        {
+
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
+
+            var _business = _repositoryBusinessModel
+                    .Get()
+                    .Where(x => x.uid == user.businessUid)
+                    .FirstOrDefault();
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _nfeInf = await _externaApi.NfeSearch(new NfeListCommand
+            {
+                CnpjCpf = _business.CnpjCpf,
+                Description = cmd.Description,
+                Type = cmd.Type,
+                Page = cmd.Page,
+                PageSize = cmd.PageSize,
+                Start = cmd.StartDate != null ? cmd.StartDate.Value.Date : null,
+                End = cmd.EndDate != null ? cmd.EndDate.Value.Date : null,
+            });
+
+            var _listInvoice = new List<InvoiceSearch>();
+
+            foreach (var item in _nfeInf.Data)
+            {
+
+                try
+                {
+
+                    var _invoiceSearch = new InvoiceSearch
+                    {
+                        Uid = item.Uid,
+                        Name = item.DestName,
+                        DateNf = item.InsertedAt.Value,
+                        ReturnNf = item.XmlReturn,
+                        Number = item.NumberNf,
+                        Protocolo = item.XmlProtocol,
+                        Status = item.Status,
+                        Total = item.Total,
+                        XmlSend = item.XmlSend
+                    };
+
+                    _listInvoice.Add(_invoiceSearch);
+                }
+                catch
+                {
+                    continue;
+                }
+            }
+
+            int totalRows = _nfeInf.TotalRows;
+            var paginated = new ResponsePaginated<List<InvoiceSearch>>(_listInvoice ?? new List<InvoiceSearch>(), cmd.Page, cmd.PageSize, totalRows);
+
+            return paginated;
+
+        }
+
+        public async Task<ResponsePaginated<List<InvoiceSearch>>> SearchTalaoNfse(InvoiceListCommand cmd)
+        {
+
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
+
+            var _business = _repositoryBusinessModel
+                    .Get()
+                    .Where(x => x.uid == user.businessUid).FirstOrDefault();
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _nfeInf = await _externaApi.NfseSearch(new NfseListCommand
+            {
+                CnpjCpf = _business.CnpjCpf,
+                Description = cmd.Description,
+                Page = cmd.Page,
+                PageSize = cmd.PageSize
+            });
+
+            var _listInvoice = new List<InvoiceSearch>();
+
+            foreach (var item in _nfeInf.Data)
+            {
+                try
+                {
+
+                    XmlDocument _xml = new XmlDocument();
+
+                    _listInvoice.Add(new InvoiceSearch
+                    {
+                        Uid = item.uid,
+                        Name = item.NameTomador,
+                        DateNf = item.insertedAt.Value,
+                        ReturnNf = item.XmlReturn,
+                        Number = item.NumberNf,
+                        Protocolo = item.XmlProtocol,
+                        Status = item.Status,
+                        Total = item.Total,
+                        XmlSend = item.XmlSend,
+                        XmlProc = item.XmlProc
+
+                    });
+
+                }
+                catch
+                {
+                    continue;
+                }
+            }
+
+            int totalRows = _nfeInf.TotalRows;
+            var paginated = new ResponsePaginated<List<InvoiceSearch>>(_listInvoice ?? new List<InvoiceSearch>(), cmd.Page, cmd.PageSize, totalRows);
+
+            return paginated;
+
+        }
+
+        public async Task<bool> TalaodenotasNfseRPS(Guid uid)
+        {
+            try
+            {
+                var _extrenalApi = new externalApi
+                    .talaodenotas
+                    .services
+                    .Services();
+
+                var _nfe = await _extrenalApi.NfseRPS(uid);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+        }
+
+        public async Task<bool> ClearTalaoDeNotas(Guid uid, string type)
+        {
+            var _invoice = _repository
+                .Get()
+                .Where(x => x.uid.Value == uid)
+                .FirstOrDefault();
+
+            switch (type.ToLower())
+            {
+                case "nfe":
+                    {
+                        _invoice.TalaodenotasNFeUid = null;
+                        _invoice.DocNFe = 0;
+                        _invoice.Done = false;
+                        break;
+                    }
+                case "nfce":
+                    {
+                        _invoice.TalaodenotasNFCeUid = null;
+                        _invoice.DocNFCe = 0;
+                        _invoice.DoneNfce = false;
+                        break;
+                    }
+                case "nfse":
+                    {
+                        _invoice.TalaodenotasNFSeUid = null;
+                        _invoice.DocNFSe = 0;
+                        _invoice.DoneNfse = false;
+                        break;
+                    }
+                default:
+                    break;
+            }
+
+            _invoice.updatedAt = DateTime.Now;
+            _invoice.updatedPersonUid = user.personUid;
+
+            _repository.Save(_invoice);
+            await _repository.CommitChanges();
+
+            return true;
+        }
+
+        public async Task<bool> SendNfe(Guid cmd, string email)
+        {
+
+            var _invoice = _repository
+                .Get()
+                .Include(x => x.Business)
+                .Where(x => x.uid.Value == cmd)
+                .FirstOrDefault();
+
+            externalApi.Pomboo _pomboo = new externalApi.Pomboo();
+
+            foreach (var item in email.Split(','))
+                await _pomboo.SendMail("Sinos Service", $"{_invoice.Business.Name} emitiu sua Nota Fiscal: {_invoice.DocNFe}", $"Nota Fiscal<br/>Emitente: {_invoice.Business.Name}<br/>NR: {_invoice.DocNFe}<br/>Segue o link para Imprimir <br> https://imprimir.talaodenotas.com.br/nfe/{_invoice.TalaodenotasNFeUid}<br/>Segue o link para download do xml <br> https://api.talaodenotas.com.br/nfe/proc/{_invoice.TalaodenotasNFeUid}/down", item);
+
+            return true;
+        }
+
+        public async Task<bool> SendNfse(Guid cmd, string email)
+        {
+            var _invoice = _repository
+                .Get()
+                .Include(x => x.Business)
+                .Where(x => x.uid.Value == cmd)
+                .FirstOrDefault();
+
+            externalApi.Pomboo _pomboo = new externalApi.Pomboo();
+
+            foreach (var item in email.Split(','))
+                await _pomboo.SendMail("Sinos Service", $"{_invoice.Business.Name} emitiu sua Nota Fiscal: {_invoice.DocNFSe}", $"Nota Fiscal<br/>Emitente: {_invoice.Business.Name}<br/>NR: {_invoice.DocNFSe}<br/>Segue o link para Imprimir <br> https://imprimir.talaodenotas.com.br/nfse/{_invoice.TalaodenotasNFSeUid}<br/>Segue o link para download do xml <br> https://api.talaodenotas.com.br/nfse/proc/{_invoice.TalaodenotasNFSeUid}/down", item);
+
+            return true;
+        }
+
+        public async Task<ResponsePaginated<List<InvoiceNumberDisabledSearch>>> SearchTalaoNfeNumberDisable(InvoiceListCommand cmd)
+        {
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
+
+            var _business = _repositoryBusinessModel
+                    .Get()
+                    .Where(x => x.uid == user.businessUid).FirstOrDefault();
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _nfeInf = await _externaApi.NfeNumberDisableSearch(new NfeNumberDisableListCommand
+            {
+                CnpjCpf = _business.CnpjCpf,
+                Description = cmd.Description,
+                Mod = cmd.Type,
+                Page = cmd.Page,
+                PageSize = cmd.PageSize
+            });
+
+            var _listInvoice = new List<InvoiceNumberDisabledSearch>();
+
+            foreach (var item in _nfeInf.Data)
+            {
+
+                var _invoiceSearch = new InvoiceNumberDisabledSearch();
+
+                _invoiceSearch.Uid = item.Uid;
+                _invoiceSearch.NumberSerie = item.NumberSerie;
+                _invoiceSearch.NumberStart = item.NumberStart;
+                _invoiceSearch.NumberEnd = item.NumberEnd;
+                _invoiceSearch.XmlReturn = item.XmlReturn;
+                _invoiceSearch.InsertedAt = item.InsertedAt;
+
+                _listInvoice.Add(_invoiceSearch);
+            }
+
+            int totalRows = _nfeInf.TotalRows;
+            var paginated = new ResponsePaginated<List<InvoiceNumberDisabledSearch>>(_listInvoice ?? new List<InvoiceNumberDisabledSearch>(), cmd.Page, cmd.PageSize, totalRows);
+
+            return paginated;
+        }
+
+        public async Task<bool> GenerateNfeDisable(Core.BC.Domain.Entities.invoice.NfeNumberDisable cmd)
+        {
+            try
+            {
+
+                var _person = _repositoryBusinessModel
+                    .Get()
+                    .Where(x => x.uid == user.businessUid)
+                    .FirstOrDefault();
+
+                var _extrenalApi = new externalApi
+                    .talaodenotas
+                    .services
+                .Services();
+
+                var _nfe = await _extrenalApi.NfeNumberDisable(new externalApi.talaodenotas.entities.NfeNumberDisable
+                {
+                    PersonUid = _person.TalaodenotasUid.ToString(),
+                    NumberSerie = cmd.NumberSerie,
+                    NumberStart = cmd.NumberStart,
+                    NumberEnd = cmd.NumberEnd
+                });
+
+                if (_nfe != null)
+                    return true;
+                else
+                {
+                    await bus.Raise(Notification.CreateError("Title", _extrenalApi.Error.Errors.Title.FirstOrDefault()));
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+        }
+
+        public async Task<bool> ReOpen(InvoiceModel data)
+        {
+            var invoiceParcels = _repositoryInvoiceParcel
+                            .Get()
+                            .Where(x => x.removedAt == null
+                                            && x.InvoiceUid.Equals(data.uid))
+                            .ToList();
+
+            if (data.InvoiceParcels != null)
+            {
+                foreach (var item in data.InvoiceParcels)
+                {
+                    if (item.PayDate != null)
+                        if (item.PayDate != invoiceParcels.Find(x => x.uid == item.uid).PayDate)
+                        {
+
+                            if (item.Deadline.Date < DateTime.Now.Date)
+                            {
+                                await bus.Raise(Notification.CreateError("Data inválida", "A validade deve ser maior que a data atual"));
+                                return false;
+                            }
+
+                        }
+                }
+
+                foreach (var invoiceParcel in invoiceParcels)
+                {
+                    invoiceParcel.Payment = null;
+                    invoiceParcel.removedAt = DateTime.Now;
+                    invoiceParcel.updatedPersonUid = user.personUid;
+                    invoiceParcel.updatedAt = DateTime.Now;
+                    invoiceParcel.BusinessUid = data.businessUid;
+                    invoiceParcel.Type = data.Type;
+                    _repositoryInvoiceParcel.Save(invoiceParcel);
+
+                }
+
+                foreach (var item in data.InvoiceParcels)
+                {
+                    item.InvoiceUid = data.uid;
+                    item.uid = null;
+                    item.Payment = null;
+                    item.insertedAt = DateTime.Now;
+                    item.insertedPersonUid = user.personUid;
+                    item.BusinessUid = data.businessUid;
+                    item.Type = data.Type;
+                    _repositoryInvoiceParcel.Save(item);
+
+                }
+
+            }
+
+            data.removedAt = null;
+            data.InvoiceParcels = null;
+            data.Client = null;
+
+            this._repository.Save(data);
+
+            await this._repository.CommitChanges();
+
+            logger.LogInformation($"Dado passado para analise: {JsonConvert.SerializeObject(data, settings)}");
+
+            return true;
+        }
+
+        public async Task<bool> GetNumberNfce()
+        {
+            var _l = this._repository.Get().Where(x => x.DocNFCe == 0 && x.TalaodenotasNFCeUid != null).ToList();
+
+            var _extrenalApi = new externalApi.talaodenotas.services.Services();
+
+            foreach (var item in _l)
+            {
+
+                var _nfe = await _extrenalApi.NfeStatus(item.TalaodenotasNFCeUid.Value);
+
+                if (_nfe.Status.ToLower().Equals("done"))
+                {
+
+                    XmlDocument _xml = new XmlDocument();
+                    _xml.LoadXml(_nfe.XmlSend);
+
+                    var _nf = string.Empty;
+                    foreach (XmlNode iNf in _xml.GetElementsByTagName("nNF"))
+                    {
+                        _nf = iNf.ChildNodes[0].InnerText;
+                    }
+
+                    item.DocNFCe = int.Parse(_nf);
+
+                    this._repository.Save(item);
+                }
+
+            }
+
+            await this._repository.CommitChanges();
+
+            return true;
+        }
+
+        public async Task<bool> StatusNFE(Guid businessUid, int year, int month)
+        {
+            var _l = _repository.Get()
+                            .Where(x => x.businessUid == businessUid
+                                                && x.insertedAt.Value.Year == year
+                                                && x.insertedAt.Value.Month == month
+                                                && (x.TalaodenotasNFCeUid != null
+                                                        || x.TalaodenotasNFeUid != null
+                                                        || x.TalaodenotasNFSeUid != null))
+                            .ToList();
+
+            foreach (var item in _l)
+            {
+
+                if (item.TalaodenotasNFeUid != null)
+                {
+                    var _r = await this.NfeStatus(item.TalaodenotasNFeUid.Value);
+                    if (_r.Status == "DONE")
+                        item.Done = true;
+                    else if (_r.Status == "ERROR" || _r.Status == "CANCEL")
+                    {
+                        item.Done = false;
+                        item.TalaodenotasNFeUid = null;
+                    }
+                }
+
+                if (item.TalaodenotasNFCeUid != null)
+                {
+                    var _r = await this.NfeStatus(item.TalaodenotasNFCeUid.Value);
+                    if (_r.Status == "DONE")
+                        item.DoneNfce = true;
+                    else if (_r.Status == "ERROR" || _r.Status == "CANCEL")
+                    {
+                        item.DoneNfce = false;
+                        item.TalaodenotasNFCeUid = null;
+                    }
+                }
+
+                if (item.TalaodenotasNFSeUid != null)
+                {
+                    var _r = await this.NfseStatus(item.TalaodenotasNFSeUid.Value);
+                    if (_r.Status == "DONE")
+                        item.DoneNfse = true;
+                    else if (_r.Status == "ERROR" || _r.Status == "CANCEL")
+                    {
+                        item.DoneNfse = false;
+                        item.TalaodenotasNFSeUid = null;
+                    }
+                }
+                this._repository.Save(item);
+            }
+
+            await this._repository.CommitChanges();
+
+            return true;
+        }
+
+        public async Task<ExportPdf> PdfNFE(Guid? talaoDeNotasUid)
+        {
+
+            var url = $"https://imprimir.talaodenotas.com.br/nfe/{talaoDeNotasUid}";
+
+            await new BrowserFetcher().DownloadAsync();
+
+            using var browser = await Puppeteer.LaunchAsync(new LaunchOptions
+            {
+                Headless = true,
+                IgnoreHTTPSErrors = true,
+                Args = new[]
+                {
+                    "--no-sandbox",
+                    "--disable-infobars",
+                    "--disable-setuid-sandbox",
+                    "--ignore-certificate-errors",
+                }
+            });
+
+            using var page = await browser.NewPageAsync();
+
+            await page.GoToAsync(url, WaitUntilNavigation.Networkidle0);
+
+            // Cria o PDF e salva diretamente no MemoryStream
+            using var pdfStream = await page.PdfStreamAsync(new PdfOptions
+            {
+                Format = PaperFormat.A4,
+                PrintBackground = true
+            });
+
+            using var memoryStream = new MemoryStream();
+            await pdfStream.CopyToAsync(memoryStream);
+
+            // Reposiciona o ponteiro do stream para o início
+            memoryStream.Position = 0;
+
+            // Agora você pode usar o memoryStream para:
+            // - retornar via API (como FileStreamResult)
+            // - salvar no banco
+            // - enviar por email, etc.
+
+            var _r = new ExportPdf();
+            _r.PDF = memoryStream;
+            return _r;
+        }
+
+        public async Task<ResponsePaginated<List<InvoiceSearch>>> SearchTalaoDfe(InvoiceListCommand cmd)
+        {
+
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
+
+            var _business = _repositoryBusinessModel
+                    .Get()
+                    .Where(x => x.uid == user.businessUid).FirstOrDefault();
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _dfeInf = await _externaApi.DfeSearch(new DfeListCommand
+            {
+                Type = "nfe",
+                BusinessUid = _business.TalaodenotasUid.Value,
+                Page = cmd.Page,
+                PageSize = cmd.PageSize,
+                Name = cmd.Description,
+            }, _business.TalaodenotasUid.Value);
+
+            var _listInvoice = new List<InvoiceSearch>();
+
+            foreach (var item in _dfeInf.Data)
+            {
+                try
+                {
+
+                    _listInvoice.Add(new InvoiceSearch
+                    {
+                        Uid = item.Uid,
+                        Name = item.From,
+                        DateNf = item.DateGeneration,
+                        Protocolo = item.Key,
+                        Number = item.Key.Substring(27, 9),
+                        Total = item.Value,
+                        TpEvent = item.TpEvent
+                    });
+
+                }
+                catch
+                {
+                    continue;
+                }
+            }
+
+            int totalRows = _dfeInf.TotalRows;
+            var paginated = new ResponsePaginated<List<InvoiceSearch>>(_listInvoice ?? new List<InvoiceSearch>(), cmd.Page, cmd.PageSize, totalRows);
+
+            return paginated;
+
+        }
+
+        public async Task<bool> ManifestNfe(string key, string tpEvent)
+        {
+
+            var _evento = new EventoCommand
+            {
+                TpEvent = tpEvent, // cancelamento
+                Key = key,
+                Note = tpEvent == "210210" ? "Ciencia da Operacao" : "Desconhecimento da Operacao"
+            };
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _r = await _externaApi.ManifestNfe(_evento);
+
+            return true;
+        }
+
+        public async Task<MemoryStream> DownloadNfeXML(string key)
+        {
+
+            var _externaApi = new externalApi.talaodenotas.services.Services();
+
+            var _r = await _externaApi.DfeXml(key);
+
+            // convert string to stream
+            byte[] byteArray = Encoding.UTF8.GetBytes(_r);
+            //byte[] byteArray = Encoding.ASCII.GetBytes(contents);
+            MemoryStream stream = new MemoryStream(byteArray);
+
+            return stream;
+        }
+
+        private string ConvertStreamToBase64(Stream stream)
+        {
+            if (stream == null)
+                throw new ArgumentNullException(nameof(stream));
+
+            using (MemoryStream memoryStream = new MemoryStream())
+            {
+                stream.CopyTo(memoryStream);
+                byte[] byteArray = memoryStream.ToArray();
+                return Convert.ToBase64String(byteArray);
+            }
+        }
+
+        public async Task<InvoiceModel> Total(InvoiceModel cmd)
+        {
+            var _data = this._repository.Get().Where(x => x.uid == cmd.uid).FirstOrDefault();
+
+            _data.Total = cmd.Total;
+
+            this._repository.Save(_data);
+
+            await this._repository.CommitChanges();
+
+            return _data;
+        }
+
+        public async Task<bool> ImportExcel()
+        {
+
+            if (!System.IO.File.Exists($"{CC.Warmup.Bootstrap.Configuration.GetPathFileImportProduct()}invoice.xlsx"))
+                return false;
+
+            var _newName = $"{DateTime.Now.ToString("yyyyMMddHHmmss")}invoice.xlsx";
+
+            System.IO.File.Move($"{CC.Warmup.Bootstrap.Configuration.GetPathFileImportProduct()}invoice.xlsx", $"{CC.Warmup.Bootstrap.Configuration.GetPathFileImportProduct()}{_newName}");
+
+            using var package = new ExcelPackage($"{CC.Warmup.Bootstrap.Configuration.GetPathFileImportProduct()}{_newName}");
+            ExcelPackage.LicenseContext = OfficeOpenXml.LicenseContext.NonCommercial;
+            var currentSheet = package.Workbook.Worksheets;
+            var workSheet = currentSheet.First();
+            var noOfCol = workSheet.Dimension.End.Column;
+            var noOfRow = workSheet.Dimension.End.Row;
+
+            for (int rowIterator = 2; rowIterator <= noOfRow; rowIterator++)
+            {
+                if (workSheet.Cells[rowIterator, 1].Value != null && DateTime.Parse(workSheet.Cells[rowIterator, 2].Value?.ToString()).Date.Year > 2018)
+                {
+
+                    try
+                    {
+
+                        var _invoce = new InvoiceModel
+                        {
+                            uid = null,
+                            businessUid = Guid.Parse(workSheet.Cells[rowIterator, 1].Value?.ToString()),
+                            ClientUid = Guid.Parse(workSheet.Cells[rowIterator, 6].Value?.ToString()),
+                            OrderUid = null,
+                            FinanceCategoryUid = null,
+                            InvoiceDate = DateTime.Parse(workSheet.Cells[rowIterator, 2].Value?.ToString()),
+                            Payed = !string.IsNullOrEmpty(workSheet.Cells[rowIterator, 4].Value?.ToString()),
+                            Done = true,
+                            DoneNfse = false,
+                            DoneNfce = false,
+                            Danfe = string.Empty,
+                            Type = workSheet.Cells[rowIterator, 5].Value?.ToString() == "E" ? "sale" : "purchase",
+                            Total = Decimal.Parse(workSheet.Cells[rowIterator, 8].Value?.ToString().Replace(".", ",")),
+                            DocNFe = 0,
+                            NfebusinessUid = null,
+                            DocNFSe = 0,
+                            NfsebusinessUid = null,
+                            DocNFCe = 0,
+                            NfcebusinessUid = null,
+                            Doc = workSheet.Cells[rowIterator, 3].Value?.ToString(),
+                            TalaodenotasNFeUid = null,
+                            TalaodenotasNFeDate = null,
+                            TalaodenotasNFSeUid = null,
+                            TalaodenotasNFSeDate = null,
+                            TalaodenotasNFCeUid = null,
+                            TalaodenotasNFCeDate = null,
+                            Description = "IMPORTACAO DE OUTRO SISTEMA",
+                            NfeXml = string.Empty,
+                            NfeProt = string.Empty,
+                            Cfop = string.Empty,
+                            Truckage = string.Empty,
+                            ExpensesType = string.Empty,
+                            Issqn = 0,
+                        };
+
+                        _invoce = this._repository.Save(_invoce);
+
+                        var _invoceParcel = new InvoiceParcelModel
+                        {
+                            uid = null,
+                            InvoiceUid = _invoce.uid,
+                            PayDate = !string.IsNullOrEmpty(workSheet.Cells[rowIterator, 4].Value?.ToString()) ? DateTime.Parse(workSheet.Cells[rowIterator, 4].Value?.ToString()) : null,
+                            Deadline = DateTime.Parse(workSheet.Cells[rowIterator, 2].Value?.ToString()),
+                            Value = Decimal.Parse(workSheet.Cells[rowIterator, 8].Value?.ToString().Replace(".", ",")),
+                            ValueAddition = 0,
+                            ValueDiscount = 0,
+                            TaxValue = 0,
+                            TaxAdvance = 0,
+                            BalanceClient = 0,
+                            Number = 0,
+                            OurId = 0,
+                            Payed = !string.IsNullOrEmpty(workSheet.Cells[rowIterator, 4].Value?.ToString()),
+                            BankUid = null,
+                            PaymentUid = Guid.Parse(workSheet.Cells[rowIterator, 7].Value?.ToString()),
+                            TefTransactionUid = null,
+                            Description = "IMPORTACAO DE OUTRO SISTEMA",
+                            From = string.Empty,
+                            IdTecnospeed = null,
+                            TecnospeedProtocolo = string.Empty,
+                            TecnospeedReturnBank = string.Empty,
+                            TecnospeedSituacao = string.Empty,
+                            Issqn = 0,
+                            BusinessUid = user.businessUid,
+                            Type = "sale"
+                        };
+
+                        this._repositoryInvoiceParcel.Save(_invoceParcel);
+
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Console.Write(ex);
+                        continue;
+                    }
+                }
+
+            }
+
+            await this._repository.CommitChanges();
+
+            return true;
+        }
+
+        public async Task<ExportPdf> PurchasePrint(Guid uid)
+        {
+            var result = new ExportPdf();
+
+            var data = await _repository.Get()
+                                        .Where(x => x.uid == uid)
+                                        .FirstOrDefaultAsync();
+
+            if (data == null)
+                throw new Exception("Dados não encontrados.");
+
+            var templatePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets/Export/productPurchase.html");
+
+            if (!System.IO.File.Exists(templatePath))
+                throw new FileNotFoundException("Template HTML não encontrado", templatePath);
+
+            var html = System.IO.File.ReadAllText(templatePath);
+
+            // Substituição segura
+            html = html.Replace("|||0|||", data.PurchaseProducts ?? "");
+
+            var browser = await PuppeteerSingleton.GetBrowserAsync();
+
+            await using var page = await browser.NewPageAsync();
+
+            // Espera a página carregar corretamente
+            await page.SetContentAsync(html, new NavigationOptions
+            {
+                WaitUntil = new[] { WaitUntilNavigation.Networkidle0 }
+            });
+
+            // Gera screenshot para debug (opcional)
+            // await page.ScreenshotAsync("debug.png");
+
+            // Usa opções de PDF seguras
+            var pdfBytes = await page.PdfDataAsync(new PdfOptions
+            {
+                Format = PaperFormat.A4,
+                PrintBackground = true,
+                MarginOptions = new MarginOptions
+                {
+                    Top = "20px",
+                    Bottom = "20px",
+                    Left = "20px",
+                    Right = "20px"
+                }
+            });
+
+            result.PDF = new MemoryStream(pdfBytes);
+
+            return result;
+        }
+
+        public async Task<bool> Cancel(Guid uid)
+        {
+            var _data = this._repository
+                                    .Get()
+                                    .Include(x => x.InvoiceParcels.Where(x => x.removedAt == null && x.Payed))
+                                    .Include(x => x.Order)
+                                    .ThenInclude(x => x.OrderProducts.Where(x => x.removedAt == null))
+                                    .Where(x => x.uid == uid)
+                                    .FirstOrDefault();
+
+            if (_data == null)
+            {
+                await bus.Raise(Notification.CreateError("Title", "Não foi possível cancelar o pedido."));
+                return false;
+            }
+
+            if (_data.DocNFCe > 0)
+            {
+                await bus.Raise(Notification.CreateError("Title", "Não foi possível cancelar o pedido. Já possui cupom emitido"));
+                return false;
+            }
+
+            if (_data.InvoiceParcels != null && _data.InvoiceParcels.Count > 0)
+            {
+                await bus.Raise(Notification.CreateError("Title", "Não foi possível cancelar o pedido. Já possui parcelas em aberto"));
+                return false;
+            }
+
+            _data.removedAt = DateTime.Now;
+            _data.updatedPersonUid = user.personUid;
+            this._repository.Save(_data);
+
+            foreach (var item in _data.Order.OrderProducts)
+            {
+
+                var _prod = this._repositoryProduct
+                                .Get()
+                                .Where(x => x.uid == item.ProductUid)
+                                .FirstOrDefault();
+
+                _prod.Storage += item.Quantity;
+                _prod.updatedPersonUid = user.personUid;
+                _prod.updatedAt = DateTime.Now;
+                this._repositoryProduct.Save(_prod);
+            }
+
+            await this._repository.CommitChanges().ConfigureAwait(false);
+
+            return true;
+        }
+
+        public async Task<bool> ParcelsInsert()
+        {
+
+            var guids = new Guid[]
+            {
+                Guid.Parse("003ad0f5-2d5d-4818-b59d-34bf93888ad8"),
+                Guid.Parse("30b5272d-ae7a-4169-8750-0a640c195c23"),
+                Guid.Parse("3b6cf3f8-c82b-42f6-9181-44db2fa8d7ca"),
+                Guid.Parse("4d9e8f14-c7c4-4f61-bdfa-f9af7891748a"),
+                Guid.Parse("6d2e5748-0eb6-4aa7-bb49-21e008c17918"),
+                Guid.Parse("6deef82e-d142-44fc-81c8-9d4627d0612f"),
+                Guid.Parse("932dfd0b-d808-4372-974b-21c24a5a13bc"),
+                Guid.Parse("9a5d35d4-7b92-4e56-a91a-b17a28abc5ce"),
+                Guid.Parse("a8a55e2d-02ef-44f2-a510-4da69e721715"),
+                Guid.Parse("a9edb3f6-e9c8-4cbb-a6f2-2f029f9c7e3c"),
+                Guid.Parse("ac0cccb5-0b46-4361-b67f-f3ed051f954e"),
+                Guid.Parse("b3044055-aebd-4a0d-91e3-a9d9e852d8e1"),
+                Guid.Parse("cd7f80de-94b3-45a4-85cc-77f373969fb7"),
+                Guid.Parse("decbb83e-a85d-4cdf-9254-1898df776e5f"),
+                Guid.Parse("df65b47a-a8bf-4e18-a6f0-f195849b5f8b"),
+                Guid.Parse("e3a6e775-8ea9-4891-a254-a35b3097a1c7"),
+                Guid.Parse("e44036ea-419b-4704-917b-4cdcd3affa24"),
+                Guid.Parse("f7d84a0e-4d6d-41fe-b7d8-f487bf3a05d8") // Corrigido espaço antes do último GUID
+            };
+
+            foreach (var iBusines in guids)
+            {
+
+                var _externaApi = new externalApi.talaodenotas.services.Services();
+
+                // var _talaodenotas = await _externaApi.getNfeUid(item.talaodenotasNFCeUid.Value);
+                var _talaodenotas1 = await _externaApi.GetNfeUid(Guid.Parse("38a6073c-7181-4460-9ccc-a9c0a5df287e"));
+
+                var _data = this._repository
+                                        .Get()
+                                        .Where(x => x.removedAt == null
+                                                    && x.insertedAt >= DateTime.Parse("2025-07-22")
+                                                    && x.insertedAt < DateTime.Parse("2025-07-24")
+                                                    && x.DocNFCe > 0
+                                                    && x.Total > 0
+                                                    && x.businessUid == iBusines
+                                                    && !x.InvoiceParcels.Any(ip => ip.removedAt == null))
+                                        .Take(20)
+                                        .ToList();
+
+                foreach (var item in _data)
+                {
+                    if (item.InvoiceParcels == null)
+                    {
+
+                        // var _talaodenotas = await _externaApi.getNfeUid(item.talaodenotasNFCeUid.Value);
+                        var _talaodenotas = await _externaApi.GetNfeUid(Guid.Parse("38a6073c-7181-4460-9ccc-a9c0a5df287e"));
+
+                        this._repositoryInvoiceParcel.Save(new InvoiceParcelModel
+                        {
+                            uid = null,
+                            InvoiceUid = item.uid,
+                            PayDate = null,
+                            Deadline = item.InvoiceDate,
+                            Value = item.Total,
+                            ValueAddition = 0,
+                            ValueDiscount = 0,
+                            TaxValue = 0,
+                            TaxAdvance = 0,
+                            BalanceClient = 0,
+                            Number = 1,
+                            OurId = 0,
+                            Payed = false,
+                            BankUid = null,
+                            PaymentUid = null,
+                            TefTransactionUid = null,
+                            Description = "Parcela única",
+                            From = string.Empty,
+                            IdTecnospeed = null,
+                            TecnospeedProtocolo = string.Empty,
+                            TecnospeedReturnBank = string.Empty,
+                            TecnospeedSituacao = string.Empty,
+                            Issqn = 0,
+                            BusinessUid = item.businessUid ?? Guid.Empty, // Ajuste para evitar nulo
+                            Type = item.Type
+                        });
+                    }
+                }
+            }
+
+            // await this._repositoryInvoiceParcel.CommitChanges().ConfigureAwait(false);
+
+            return true;
+        }
+
+        public async Task<bool> FixNumberNfe()
+        {
+            var _data = this._repository
+                            .Get()
+                            .Where(x => x.removedAt == null 
+                                            && x.DocNFe == x.DocNFSe 
+                                            && x.TalaodenotasNFeUid != null 
+                                            && x.TalaodenotasNFSeUid != null)
+                            .ToList();
+
+            var _nfe = new externalApi.talaodenotas.services.Services();
+            foreach (var item in _data)
+            {
+                var _r = await this.NfeStatus(item.TalaodenotasNFeUid.Value).ConfigureAwait(false);
+                if (_r.Status == "DONE")
+                {
+                    item.Done = true;
+                    item.DocNFe = _r.Number;
+                    this._repository.Save(item);
+                }
+            }
+
+            await this._repository.CommitChanges().ConfigureAwait(false);
+
+
+            return true;
+        }
+    }
+
+}
