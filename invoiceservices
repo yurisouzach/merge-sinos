@@ -1,112 +1,55 @@
-namespace Front.API.Controllers
-{
-    using System;
-    using System.Collections.Generic;
-    using System.Threading.Tasks;
-    using global::Core.BC.Domain.Entities.checklistConfig;
-    using global::Core.BC.Domain.Entities.checklistConfig.Commands;
-    using global::Core.BC.Domain.Entities.checklistConfig.interfaces;
-    using Interanet.Commons.Core.Shared.Interfaces;
-    using Interanet.Commons.Core.Shared.Messages;
-    using Interanet.Commons.Front.Shared.Base;
-    using MediatR;
-    using Microsoft.AspNetCore.Mvc;
-    using Microsoft.Extensions.Logging;
-    using Swashbuckle.AspNetCore.Annotations;
+import { Component, OnInit } from '@angular/core';
+import { ActivatedRoute, Router } from '@angular/router';
 
-    [Route("~/checklistConfig")]
-    [ApiExplorerSettings(GroupName = @"checklistConfig")]
-    [SwaggerTag("Api da Empresa.")]
-    public class ChecklistConfigController : DefaultControllerAbstract<ChecklistConfigModel>
-    {
-        public ChecklistConfigController(
-            IAppService<ChecklistConfigModel> service,
-            ILogger<ChecklistConfigModel> logger,
-            INotificationHandler<Notification> notification)
-            : base(service, logger, notification)
-        {
-            service.EnableUserAcl = true;
-        }
 
-        [HttpPost]
-        [SwaggerOperation(
-        Summary = "Insere  um novo registro",
-        Description = "")]
-        public async Task<IActionResult> Create(ChecklistConfigBaseCommand cmd)
-        {
-            var response = await this.service.Create(cmd);
+import { ApiClientService } from '@app/@shared/services/api-client.service';
+import { environment } from '@environments/environment';
+import { ToastrService } from 'ngx-toastr';
 
-            return this.Response(response.IsValid ? response.Data : null, null, null);
+@Component({
+  selector: 'app-checklist-print',
+  templateUrl: './checklist-print.component.html',
+  styleUrls: ['./checklist-print.component.css']
+})
+export class ChecklistPrintComponent implements OnInit {
 
-        }
+  business: any = {};
+  urlCdn = environment.urls.cdn + 'imgs/';
+  check: any  = {};
+  questions: any[] = [];
+  address: string = '';
+  name: string = '';
+  constructor(
+    private apiClientService: ApiClientService,
+    private toastr: ToastrService,
+    private route: ActivatedRoute,
+    private router: Router
+  ) { }
 
-        [HttpGet]
-        [Route("all")]
-        public async Task<IActionResult> All()
-        {
-            var app = (IchecklistConfigServices)this.service;
-            var response = app.GetAll();
-            return this.Response(response, null);
-        }
+  ngOnInit(): void {
+    this.check.uid = this.route.snapshot.params['uid'];
+    this.apiClientService.getPath(environment.urls.api, "checklist/uid/" + this.check.uid).then((data: any ) => {
+      this.check = data.response;
+      this.name = data.name;
+      if (this.check.person?.addressStreet !== null && this.check.person?.addressStreet?.length > 0) {
+        this.address += this.check.person?.addressNumber + ' - ' + this.check.person?.addressStreet + ' - ' + this.check.person?.addressDistrict;
+        this.address += ' - ' + this.check.person?.addressCity + this.check.person?.addressState + ' - ' + this.check.person?.addressZipCode;
+      }
+      this.business = data.response.business;
+      
+      var i = 0;
+      this.check.question.split('|').forEach(element => {
+        const a1 = {
+          question: element,
+          respose: this.check.response.split('|')[i],
+          note: '',
+          image:  this.check.image.split('|')[i],
+        } as unknown as any;
 
-        [HttpPut]
-        [SwaggerOperation(
-        Summary = "Atualiza um registro",
-        Description = ".")]
-        public async Task<IActionResult> Update(ChecklistConfigModel cmd)
-        {
+        this.questions.push(a1);
+        i++;
+      });
+    });
+  }
 
-            var app = (IchecklistConfigServices)this.service;
-            var response = await app.Update(cmd);
-
-            return this.Response(true);
-        }
-
-        [HttpPost]
-        [Route("search")]
-        [SwaggerOperation(
-       Summary = "Pesquisar",
-       Description = "Pesquisa de forma paginada ...")]
-        [SwaggerResponse(404, "Não há nenhum objeto cadastrado para este recurso.", null)]
-        [SwaggerResponse(200, "Ação realizada com sucesso.", typeof(ResponsePaginated<List<ChecklistConfigModel>>))]
-        public virtual async Task<IActionResult> Search(
-           [FromBody] ChecklistConfigListCommand cmd,
-           [FromHeader] int pageSize = 10,
-           [FromHeader] int page = 1,
-           [FromHeader] string order = "asc",
-           [FromHeader] string columnOrder = "Title"
-           )
-        {
-            cmd.PageSize = pageSize;
-            cmd.Order = order;
-            cmd.ColumnOrder = columnOrder;
-            var app = (IchecklistConfigServices)this.service;
-            var response = await app.Search(cmd);
-            return this.Response(response.IsValid ? response : null, nameof(this.GetById), null);
-        }
-
-        [HttpGet]
-        [Route("parent/{uid}")]
-        [SwaggerOperation(
-       Summary = "Pesquisar",
-       Description = "Pesquisa de forma paginada ...")]
-        [SwaggerResponse(404, "Não há nenhum objeto cadastrado para este recurso.", null)]
-        [SwaggerResponse(200, "Ação realizada com sucesso.", typeof(ResponsePaginated<List<ChecklistConfigModel>>))]
-        public IActionResult ByPerson(
-           [FromHeader] Guid businessUid,
-           [FromRoute] Guid uid,
-           [FromHeader] string order = "asc",
-           [FromHeader] string columnOrder = "name"
-           )
-        {
-            var cmd = new ChecklistConfigListCommand();
-            cmd.Order = order;
-            cmd.Uid = uid;
-            cmd.ColumnOrder = columnOrder;
-            var app = (IchecklistConfigServices)this.service;
-            var response = app.Parent(cmd);
-            return this.Response(response);
-        }
-
-    }
 }
