@@ -1,219 +1,61 @@
-<div class="content-wrapper" style="min-height: 922px;margin: 0px;">
-    <section class="content">
-        <div class="container-fluid invoice">
-            <div class="row">
-                <div *ngIf="this.business.photoLogo != (this.urlCdn + 'undefined')" class="col-3"
-                    style="text-align: center; min-inline-size: fit-content;">
-                    <h4>
-                        <img-minio [fileName]="business?.photoLogo" [style]="'width: auto; height: 120px;'"></img-minio>
-                    </h4>
-                </div>
-                <div class="col-6 invoice-col" style="margin-top: 20px; font-size: 12px;">
-                    <h4 style="font-weight: 700;margin-bottom: -0.5rem;">{{this.business.name}}</h4><br>
-                    {{this.business.cnpjCpf != '' ? 'CPF/CNPJ:' : ''}} {{this.business.cnpjCpf | mask: 'CPF_CNPJ'}} <br>
-                    {{this.business.addressStreet + ', ' + this.business.addressNumber + ' ' +
-                    this.business.addressDistrict}}
-                    {{this.business.addressCity + ', ' + this.business.addressState + ' ' +
-                    this.business.addressZipCode}}
-                    Fixo: {{this.business.phone2 | mask : '(00) 0000-0000 || (00) 00000-0000'}}
-                    Celular: {{this.business.phone1 | mask : '(00) 00000-0000 || (00) 00000-0000'}}<br>
-                    Email: {{this.business.email}}
-                </div>
-            </div>
+.printme {
+	display: block;
+}
+@media print {
+	.no-printme  {
+		display: none!important;
+	}
+	.printme  {
+		display: block!important;
+	}
+}
 
-            <div class="row" style="margin: 0px;
-            padding: 0px;
-            height: 60px;">
-                <div class="table-responsive col-12 invoice-info">
-                    <table class="table table-striped">
-                        <caption style="color: #000;font-size: 22px; background-color: rgba(0, 0, 0, 0.05);"><b>INFORMAÇÕES DO CLIENTE</b>
-                        </caption>
-                    </table>
-                </div>
-            </div>
+caption {
+  caption-side: top;
+  text-align: center;
+}
 
-            <!-- <div class="row">
-                <br>
-                <div class="table-responsive col-12 invoice-info" style="margin: 10px 0px">
-                    <table class="table table-striped">
-                        <tbody>
-                            <tr>
-                                <td style="width: 15%;">
-                                    <b>Cliente:</b>
-                                </td>
-                                <td colspan="3">
-                                    <strong>{{this.check.person?.nameCompany}} {{this.check.person?.cnpjCpf | mask:
-                                        'CPF_CNPJ'}}</strong>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td style="width: 15%;">
-                                    <b>Endereço:</b>
-                                </td>
-                                <td style="border-right: 1px solid lightgray;">
-                                    {{this.address}}
-                                </td>
-                                <td style="width: 15%;">
-                                    <b>Email:</b>
-                                </td>
-                                <td>
-                                    {{this.check.person?.email}}
-                                </td>
-                            </tr>
-                            <tr>
-                                <td style="width: 15%;">
-                                    <b>Celular:</b>
-                                </td>
-                                <td style="border-right: 1px solid lightgray;">
-                                    {{ this.check.person?.phone1 | mask : '(00) 00000-0000||(00) 000000-0000'}}
-                                </td>
-                                <td style="width: 15%;">
-                                    <b>Fixo:</b>
-                                </td>
-                                <td>
-                                    {{ this.check.person?.phone2 | mask : '(00) 0000-0000||(00) 00000-0000'}}
-                                </td>
-                            </tr>
-                            <tr>
-                                <td style="width: 15%;">
-                                  <b>OPERADOR:</b>
-                                </td>
-                                <td colspan="3" style="border-right: 1px solid lightgray;">
-                                  {{ this.check.personOperator}}
-                                </td>
-                              </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div> -->
+.checked::after {
+  	content: '✓';
+  	position: absolute;
+	top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  	color: black;
+  	font-size: 10px;
+	font-weight: bold;
+}
 
-            <div class="row" style="margin-bottom: 10px;">
-                <div class="table-responsive col-12 invoice-info">
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;">
-                        <b>Cliente:</b> <b>{{this.check.person?.nameCompany}} {{this.check.person?.cnpjCpf | mask:
-                            'CPF_CNPJ'}}</b>
-                    </div>
-                    <div class="col-md-4" *ngIf="this.address" style="float: left;text-transform: uppercase;">
-                        <b>Endereço:</b> {{this.address}}
-                    </div>
-                    <div class="col-md-4" *ngIf="this.check.person?.email" style="float: left;text-transform: uppercase;">
-                        <b>Email:</b> {{this.check.person?.email}}
-                    </div>
-                    <div class="col-md-4" *ngIf="this.check.person?.phone1" style="float: left;text-transform: uppercase;">
-                        <b>Celular:</b> {{ this.check.person?.phone1 | mask : '(00) 00000-0000||(00) 000000-0000'}}
-                    </div>
-                    <div class="col-md-4" *ngIf="this.check.person?.phone2" style="float: left;text-transform: uppercase;">
-                        <b>Fixo:</b> {{ this.check.person?.phone2 | mask : '(00) 0000-0000||(00) 00000-0000'}}
-                    </div>
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;">
-                        <b>OPERADOR:</b> {{ this.check.personOperator}}
-                    </div>
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;">
-                        <b>PLACA:</b> {{check.plate}}
-                    </div>
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;">
-                        <b>MARCA/MODELO:</b> {{check.brand}}
-                    </div>
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;" >
-                        <b>KM:</b> {{check.km}}
-                    </div>
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;" >
-                        <b>COR:</b> {{check.color}}
-                    </div>
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;" >
-                        <b>CHASSI:</b> {{check.chassi}}
-                    </div>
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;" >
-                        <b>MOTOR:</b> {{check.motor}}
-                    </div>
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;" >
-                        <b>NÍVEL DO TANQUE:</b> {{check.levelFuel}} % 
-                    </div>
-                    <div class="col-md-4" style="float: left;text-transform: uppercase;" >
-                        <b>GERADO EM:</b> {{check.insertedAt | date : 'dd/MM/yyyy HH:mm'}}
-                    </div>
-                    <div *ngIf="check.updatedAt !== undefined" class="col-md-4" style="float: left;text-transform: uppercase;" >
-                        <b>ÚLTIMA ALTERAÇÃO EM:</b> {{check.updatedAt | date : 'dd/MM/yyyy HH:mm'}}
-                    </div>
-                </div>
-                <!-- /.col -->
-            </div>
+.table th, .table td {
+  padding: 0.2rem;}
 
-            <div class="row">
-                <div class="col-12">
-                    <!-- Main content -->
-                    <div class="invoice p-3 mb-3">
-                        <!-- Table row order-->
-                        <div class="row">
-                            <div class="row" style="margin: 0px;
-                                padding: 0px;
-                                height: 50px;
-                                width: 100%;
-                                margin-bottom: 10px;">
-                                <div class="table-responsive col-12 invoice-info">
-                                    <table class="table table-striped">
-                                        <caption style="color: #000;font-size: 22px; background-color: rgba(0, 0, 0, 0.05);"><b>CHECKLIST {{this.name}}</b>
-                                        </caption>
-                                    </table>
-                                </div>
-                            </div>
-                            <div class="col-12 table-responsive">
-                                <table class="table table-striped">
-                                    <thead>
-                                        <tr>
-                                            <th>ATENDE</th>
-                                            <th>ITEM</th>
-                                            <th>OBSERVAÇÃO</th>
-                                            <th>FOTO</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <tr *ngFor="let i of questions">
-                                            <th style="align-content: center;"> <div [ngClass]="{ checked: i.respose.includes('true') }" style="border: 3px solid black; height: 15px; width: 15px; border-radius: 3px; position: relative;"></div> </th>
-                                            <!-- <th>{{(i.respose.includes('true') ? 'SIM': 'NÃO')}}</th> -->
-                                            <th style="text-transform: uppercase;">{{i.question}}</th>
-                                            <th style="text-transform: uppercase;">{{i.respose.split('-')[1]}}</th>
-                                            <th>
-                                                <img-minio [fileName]="i.image" [style]="'max-width:100%;max-height:100%; object-fit: cover;'"></img-minio>
-                                            </th>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                            <!-- /.col -->
-                        </div>
-                        <!-- /.row -->
-                    </div>
-                </div>
-            </div>
+@media only screen and (max-width: 480px){
+	#templateColumns{
+		width:100% !important;
+	}
 
-            <div class="row">
-                <br>
-                <div class="table-responsive col-12 invoice-info" style="margin: 10px 0px">
-                    <table class="table table-striped">
-                        <tbody>
-                            <tr>
-                                <td style="width: 15%;">
-                                    <b>Descrição Complementar:</b>
-                                </td>
-                            </tr>
-                                <tr>
-                                <td>
-                                    {{this.check?.note}}
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-           
-            <p class="printme"
-              style="display: none;text-align: center; border-top: solid 1px; margin: 70px 80px 20px 70px;text-transform: uppercase;">
-              <strong>{{this.check.person?.nameCompany}} {{this.check.person?.cnpjCpf | mask:
-                'CPF_CNPJ'}}</strong>
-              <br>
-              Assinatura do cliente
-            </p>
-        </div>
-    </section>
-</div>
+	.templateColumnContainer{
+		display:block !important;
+		width:100% !important;
+	}
+
+	.columnImage{
+		height:auto !important;
+		max-width:480px !important;
+		width:100% !important;
+	}
+
+	.leftColumnContent{
+		font-size:16px !important;
+		line-height:125% !important;
+	}
+
+	.no-media{
+		display: none;
+	}
+
+	.rightColumnContent{
+		font-size:16px !important;
+		line-height:125% !important;
+	}
+}
