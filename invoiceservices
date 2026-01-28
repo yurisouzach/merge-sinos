@@ -1,61 +1,1371 @@
-.printme {
-	display: block;
-}
-@media print {
-	.no-printme  {
-		display: none!important;
-	}
-	.printme  {
-		display: block!important;
-	}
-}
+import { Component, ElementRef, Input, OnInit, ViewChild } from '@angular/core';
+import { ToastrService } from 'ngx-toastr';
 
-caption {
-  caption-side: top;
-  text-align: center;
-}
+import { ApiClientService } from '@app/@shared/services/api-client.service';
 
-.checked::after {
-  	content: '✓';
-  	position: absolute;
-	top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-  	color: black;
-  	font-size: 10px;
-	font-weight: bold;
-}
+import { ActivatedRoute, Router } from '@angular/router';
 
-.table th, .table td {
-  padding: 0.2rem;}
+import { DatePipe } from '@angular/common';
 
-@media only screen and (max-width: 480px){
-	#templateColumns{
-		width:100% !important;
-	}
+import { NgxSpinnerService } from 'ngx-spinner';
+import { UserPermissionService } from '@app/@shared/services/user-permission.service';
 
-	.templateColumnContainer{
-		display:block !important;
-		width:100% !important;
-	}
 
-	.columnImage{
-		height:auto !important;
-		max-width:480px !important;
-		width:100% !important;
-	}
+import * as XLSX from "xlsx";
+import { environment } from '@environments/environment';
+import { NgxIndexedDBService } from 'ngx-indexed-db';
 
-	.leftColumnContent{
-		font-size:16px !important;
-		line-height:125% !important;
-	}
 
-	.no-media{
-		display: none;
-	}
+@Component({
+  selector: 'app-order-form',
+  templateUrl: './order-form.component.html',
+  styleUrls: ['./order-form.component.scss']
+})
+export class OrderFormComponent implements OnInit {
 
-	.rightColumnContent{
-		font-size:16px !important;
-		line-height:125% !important;
-	}
+  business: any = {};
+  host: string = environment.host;
+  orderProduct: any = {};
+  productss: any[] = [];
+  servicess: any[] = [];
+  debt: boolean = false;
+  clients: any[] = [];
+  providers: any[] = [];
+  technicals: any[] = [];
+  salesMan: any[] = [];
+  media: any = {};
+  orderMedia: any = {};
+  ordering: boolean = false;
+  saving: boolean = true;
+  onAprove: boolean = false;
+  aproved: boolean = false;
+  book: boolean = false;
+  doing: boolean = false;
+  done: boolean = false;
+  edit: boolean = true;
+  cancel: boolean = true;
+  removeAction: boolean = false;
+  order: any = {};
+  photoUrl: string = '';
+  photosUrl: any[] = [];;
+  private datePipe: DatePipe;
+  direction: boolean = true;
+  pageSize: number = 30000;
+  rows: number = 0;
+  totalRows: number = 0;
+  totalOrder: number = 0;
+  totalPage: number = 1;
+  page: number = 1;
+  isinit: boolean = false;
+  show: boolean = true;
+  errorOnLoaging: boolean = false;
+  isSearchFinish: boolean = false;
+  paginationSearch: boolean = false;
+  searchParameterDescription: string = "";
+
+  motorUid: string = '';
+  motorBrand: any[] = [];
+  motorModel: any[] = [];
+
+  checklists: any[] = [];
+
+  productInputs: any[] = [];
+
+  products: any[] = [];
+  productsInputs: any[] = [];
+  typesDiscount: any[] = [];
+
+
+  discountGeneral: number = 0;
+  discountGeneralPrice: number = 0;
+
+  discountPermission: boolean = false;
+
+  totalProducts: any = 0;
+  viewCost: boolean = false;
+  changePrice: boolean = false;
+  warehouseProfile: boolean = false;
+  urlCdn = environment.urls.cdn;
+  types: any[] = [];
+  osReopen: boolean = false;
+  docs: boolean = false;
+  docsDescription: any = ``;
+  typeDiscount: any = `Ambos`;
+
+  expandedRow: number | null = null;
+
+  showConfirm: boolean = false;
+  showMedia: boolean = false;
+  showMediaCheckin: boolean = false;
+  showMediaDuring: boolean = false;
+  showMediaCheckout: boolean = false;
+  openedMedia: 'Checkin' | 'During' | 'Checkout' | null = null;
+
+  @ViewChild('myInput') myInputVariable: ElementRef;
+
+  constructor(
+    private userPermissionService: UserPermissionService,
+    private apiClientService: ApiClientService,
+    public router: Router,
+    private route: ActivatedRoute,
+    private toastr: ToastrService,
+    private spinner: NgxSpinnerService,
+    private dbService: NgxIndexedDBService
+
+  ) {
+
+    this.typesDiscount.push(`Ambos`);
+    this.typesDiscount.push(`Por Produto`);
+    this.typesDiscount.push(`Por Serviço`);
+
+  }
+
+
+  async ngOnInit(): Promise<void> {
+
+    
+
+    if (!this.userPermissionService.verfiyView()) {
+      this.toastr.error("Não autorizado")
+      window.history.go(-1);
+    }
+
+    this.business = JSON.parse(localStorage.getItem('business') || '');
+
+    this.urlCdn = `${environment.urls.cdn}/${this.business.uid}/`;
+
+    this.getProducts();
+
+    // this.getChecklist();
+
+    this.getEmployee();
+
+    this.types.push({
+      nameInternal: 'normal',
+      name: 'Normal',
+    });
+
+    this.types.push({
+      nameInternal: 'warranty',
+      name: 'Garantia',
+    });
+
+    this.types.push({
+      nameInternal: 'insuranceCompany',
+      name: 'Seguradora',
+    });
+
+    this.types.push({
+      nameInternal: 'association',
+      name: 'Associação',
+    });
+
+    this.types.push({
+      nameInternal: 'rentalCompany',
+      name: 'Locadora',
+    });
+
+    this.types.push({
+      nameInternal: 'particular',
+      name: 'Particular',
+    });
+
+    this.types.push({
+      nameInternal: 'mechanics',
+      name: 'Mecânica',
+    });
+
+    this.types.push({
+      nameInternal: 'electrical',
+      name: 'Elétrica',
+    });
+
+    this.types.push({
+      nameInternal: 'bodyShop',
+      name: 'Funilaria',
+    });
+
+    this.types.push({
+      nameInternal: 'lightLine',
+      name: 'Linha Leve',
+    });
+
+    this.types.push({
+      nameInternal: 'heavyLine',
+      name: 'Linha Pesada',
+    });
+
+    this.types.push({
+      nameInternal: 'preparation',
+      name: 'Preparação',
+    });
+
+    this.types.push({
+      nameInternal: 'free',
+      name: 'Cortesia',
+    });
+    this.types.push({
+      nameInternal: 'request',
+      name: 'Pedido',
+    });
+
+    if (this.route.snapshot.params['uid'] !== 'new') {
+      this.order.uid = this.route.snapshot.params['uid'];
+    }
+    else {
+      this.ordering = true
+      this.saving = false;
+      this.cancel = false;
+      this.order.type = 'normal';
+
+      if (this.business.defaultDeadline != undefined && this.business.defaultDeadline != null) {
+        var now = new Date();
+        now.setDate(now.getDate() + this.business.defaultDeadline)
+        this.order.expiringDate = now;
+      }
+    }
+    this.order.orderProducts = [];
+    this.order.plateM = {};
+    this.order.orderMedias = [];
+    await this.getPerson();
+
+
+    const ssProfiles = localStorage.getItem('ssProfiles') || '';
+    const _vProfiles: any[] = JSON.parse(ssProfiles);
+    this.discountPermission = _vProfiles.find(x => x.nameInternal == 'discount')?.save;
+    this.viewCost = _vProfiles.find(x => x.nameInternal == 'costProduct')?.save;
+    this.changePrice = _vProfiles.find(x => x.nameInternal == 'osBlockChangeValuePrice')?.save;
+    this.warehouseProfile = _vProfiles.find(x => x.nameInternal == 'warehouse')?.save;
+
+    this.osReopen = this.userPermissionService.verfiyView(`order-reopen`)
+  }
+
+  verifyPhone(): boolean {
+    if (this.order.uid != undefined && this.order.client != undefined) {
+      if (this.order.uid != null && this.order.client.uid != null) {
+        if (this.clients.filter(x => x.uid == this.order.client.uid && x.phone1 != null && x.phone1.length > 8).length > 0) {
+          return true;
+
+        }
+      }
+    }
+
+
+    return false
+  }
+
+  getProducts() {
+
+    // this.dbService.getAll('products').subscribe((data: any[]) => {
+    //   this.products = data;
+    //   data.forEach((element: any) => {
+    //     if (element.productInputs)
+    //       this.productsInputs.push(element)
+    //   });
+    //   console.log('Produtos carregados:', this.products);
+    // });
+
+    this.apiClientService.getPath(environment.urls.api, "product/pdv").then((data: any[]) => {
+      this.products = data;
+      data.forEach((element: any) => {
+        if (element.productInputs)
+          this.productsInputs.push(element)
+      });
+    });
+
+  }
+
+  async openWhatsapp() {
+
+
+    var client = this.clients.find(x => x.uid == this.order.client.uid);
+    var b: any = JSON.parse(localStorage.getItem('business') || '');
+    await this.apiClientService.getPath(environment.urls.apiOrder, "business/byuid/" + b.uid).then((data: any) => {
+      b = data;
+
+      var link = "https://app.sinosservice.com.br/order/aprove/" + this.order.uid;
+      var message = b.businessOrderStatus.find(x => x.orderStatus.name == this.order.status)?.message;
+      if (message !== undefined) {
+        message = message.replace("((empresa))", b.name);
+        message = message.replace("((cliente))", client?.nameCompany || '');
+        message = message.replace("((os))", this.order.number.toString());
+        message = message.replace("((link))", link);
+        message = message.replace("((status))", this.order.status);
+        if (this.order.status == "Agendado")
+          message = message.replace("((dataagendamento))", this.order.bookedDate.toString());
+
+        var phone = this.clients.find(x => x.uid == this.order.client.uid)?.phone1;
+
+        if (message.length < 0)
+          message = link;
+
+        const url = "https://api.whatsapp.com/send?phone=55" + phone + "&text=" + message;
+
+        window.open(url, '_blank')!.focus(); // still error?
+
+      }
+
+
+      this.spinner.hide();
+    });
+
+
+
+  }
+
+  buttons() {
+    switch (this.order?.status?.toLowerCase()) {
+      case 'orçamento':
+        this.cancel = true;
+        this.saving = true;
+        this.onAprove = true;
+        this.ordering = false;
+        break;
+
+      case 'aguardando aprovação':
+        this.cancel = true;
+        this.saving = true;
+        this.aproved = true;
+        this.onAprove = false;
+        break;
+
+      case 'aguardando agendamento':
+        this.cancel = true;
+        this.saving = true;
+        this.book = true;
+        this.aproved = false;
+        break;
+
+      case 'agendado':
+        this.cancel = true;
+        this.saving = true;
+        this.doing = true;
+        this.book = false;
+        break;
+
+      case 'em andamento':
+        this.cancel = true;
+        this.saving = true;
+        this.done = true;
+        this.doing = false;
+        break;
+
+      case 'cancelado':
+        this.cancel = false;
+        this.saving = false;
+        this.edit = false;
+        this.doing = false;
+        this.onAprove = false;
+        this.ordering = false;
+        this.ordering = false;
+        this.aproved = false;
+        this.book = false;
+        this.done = false;
+        break;
+
+      case 'concluído':
+        this.edit = false;
+        this.cancel = false;
+        this.saving = false;
+        this.doing = false;
+        this.onAprove = false;
+        this.ordering = false;
+        this.ordering = false;
+        this.aproved = false;
+        this.book = false;
+        this.done = false;
+        break;
+
+      default:
+        this.cancel = false;
+        this.saving = false;
+        this.ordering = true
+        break;
+    }
+  }
+
+  getPerson(n: number = 1) {
+
+    this.getAllPerson();
+    if (this.order.uid !== undefined) {
+      this.getOrder();
+    }
+  }
+
+  editPerson(n: number = 1) {
+
+    window.open(`person/${this.order.clientUid}`)
+  }
+
+
+  getAllPerson(n: number = 1, spinner: boolean = false) {
+
+    this.apiClientService.getAll(environment.urls.apiOrder, "person/all", spinner).then((data: any[]) => {
+      this.clients = [];
+      this.technicals = [];
+      this.providers = [];
+      data.forEach(d => {
+        this.clients.push(d);
+        if (d.isEmployee)
+          this.technicals.push(d);
+        if (d.isSalesMan)
+          this.salesMan.push(d);
+        if (d.isProvider)
+          this.providers.push(d);
+
+        if (this.route.snapshot.params['p'] !== undefined && this.route.snapshot.params['p'] !== 'copy')
+          this.order.clientUid = this.route.snapshot.params['p'];
+
+        this.route.queryParams.subscribe(params => {
+          if (params['desc'] !== undefined && params['desc'] !== null && params['desc'] !== '')
+            this.order.description = params['desc'];
+
+        });
+      });
+    });
+
+  }
+
+  getEmployee(n: number = 1, spinner: boolean = false) {
+    this.clients = [];
+    this.apiClientService.getAll(environment.urls.apiOrder, "person/employee", spinner).then((data: any[]) => {
+      data.forEach(d => {
+        this.technicals.push(d);
+      });
+    });
+
+  }
+
+  getChecklist(): void {
+    const cmd = {
+      "description": '',
+      "page": 1
+    };
+    this.checklists = [];
+    this.apiClientService.postPaginated(environment.urls.apiOrder, "checklist/search", cmd, 1, 10000, "Order", false).then((data: any) => {
+      if (data != null && data.rows > 0) {
+        data?.data?.forEach(d => {
+          this.checklists.push(d);
+        });
+
+      }
+    }).finally(() => {
+    });
+  }
+
+
+  getPlate() {
+
+    if (this.order.plate === undefined
+      || this.order.plate === null
+      || this.order.plate === '')
+      return;
+
+    this.apiClientService.getPath(environment.urls.apiOrder, "plate/plate/" + this.order.plate).then((data: any) => {
+
+      if (data != undefined) {
+        this.order.motorNote = '';
+        this.order.brand = data.brand;
+        this.order.model = data.model;
+        if (data.note != undefined && data.note != null && data.note.length > 0 && data.note.toUpperCase() != 'SEM RESTRICAO')
+          this.order.motorNote = data.note;
+        if (data.situation != undefined && data.situation != null && data.situation.length > 0 && data.situation.toUpperCase() != 'SEM RESTRIÇÃO')
+          this.order.motorNote += ', ' + data.situation;
+        this.order.motor = data.motor;
+        this.order.color = data.color;
+        this.order.year = data.year;
+        this.order.startKm = data.km;
+        this.order.chassi = data.chassi;
+        this.order.fuel = data.fuel;
+
+        this.order.carBrandTaximeter = data.carBrandTaximeter;
+        this.order.carModelTaximeter = data.carModelTaximeter;
+        this.order.carConcierge = data.carConcierge;
+        this.order.carNrSerie = data.carNrSerie;
+        this.order.carMnrInmetro = data.carMnrInmetro;
+
+        if (this.order.uid === undefined
+          && data.clientUidLast !== undefined
+          && (
+            this.order.clientUid === undefined
+            || this.order.clientUid === null
+            || this.order.clientUid === ''
+          )) {
+          this.order.clientUid = data.clientUidLast;
+        }
+
+
+
+      }
+
+    }).finally(() => {
+      this.isinit = true;
+    });
+  }
+
+
+  getOrder() {
+    this.apiClientService.getPath(environment.urls.apiOrder, "order/byuid/" + this.order.uid + '/false').then((data: any) => {
+      this.order = data;
+      this.clients.push(this.order.client);
+      data.orderProducts.forEach(element => {
+        if (this.route.snapshot.params['p'] !== undefined) {
+          element.uid = '';
+          var now = new Date();
+          now.setDate(now.getDate() + this.business.defaultDeadline)
+          this.order.expiringDate = now;
+        }
+
+        if (!element.productInputs)
+          this.servicess.push(Object.assign({}, element));
+        else
+          this.productInputs.push(Object.assign({}, element));
+      });
+      if (this.route.snapshot.params['p'] !== undefined) {
+        this.order.uid = '';
+        this.order.number = 0;
+        this.order.status = '';
+        this.order.orderMedias = [];
+        this.order.client = {};
+      }
+      this.buttons();
+    });
+  }
+
+  photos() {
+    this.order.orderMedias = this.order.orderMedias.filter(x => !x.isRemoved);
+  }
+
+
+  billing(): boolean {
+    this.order.billing = this.totalp(1) > 0 || this.totalp(2) > 0;
+    return this.order.billing;
+  }
+
+  handleInputChange(e: { dataTransfer: { files: any[] }; target: { files: any[] } }): void {
+    this.photosUrl = [];
+    const files = Array.from(e.target.files);
+    files.forEach(element => {
+      //const file = e.dataTransfer ? e.dataTransfer.files[0] : e.target.files[0];
+      const file = element;
+      const pattern = /image-*/;
+
+      if (!file.type.match(pattern)) {
+        alert('Formato inválido');
+        return;
+      }
+
+      this.docs = false;
+
+      const reader = new FileReader();
+    
+      reader.onload = (event: any) => {
+        const img = new Image();
+
+        img.onload = () => {
+          const maxWidth = 800;
+          const maxHeight = 800;
+          let { width, height } = img;
+        
+          // Redimensionamento proporcional
+          if (width > maxWidth || height > maxHeight) {
+            const aspectRatio = width / height;
+            
+            if (width > height) {
+              width = maxWidth;
+              height = Math.round(maxWidth / aspectRatio);
+            } else {
+              height = maxHeight;
+              width = Math.round(maxHeight * aspectRatio);
+            }
+          }
+          
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+        
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            alert('Erro ao processar imagem');
+            return;
+          }
+        
+          ctx.drawImage(img, 0, 0, width, height);
+        
+          // Gera base64 compactado em JPEG com qualidade de 60%
+          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.6);
+          
+          this.media.base64 = compressedBase64;
+          this.media.description = this.orderMedia.description != null ? this.orderMedia.description : '';
+          this.photosUrl.push( {
+            base64: this.media.base64,
+            description: this.media.description
+          });
+          this.savePhoto();
+        };
+      
+        img.src = event.target.result;
+      };
+    
+      reader.readAsDataURL(file);
+    });
+  }
+
+
+  _handleReaderLoaded(e: { target: any; }): void {
+    const reader = e.target;
+    this.media.base64 = reader.result;
+    //this.photoUrl = this.media.base64;
+    this.savePhoto();
+  }
+
+  callbackSuccessMedia = (resp: any) => {
+    this.orderMedia.name = resp.name;
+
+    if (this.docs)
+      this.savePhotoArray(`doc`)
+  }
+
+  callbackErrMedia = (resp: any) => {
+    console.error(resp);
+  }
+
+
+  savePhoto(): void {
+
+    if (this.media !== null) {
+      this.apiClientService.save<any>(environment.urls.apiOrder, 'media/save', this.media, this.callbackSuccessMedia, this.callbackErrMedia);
+    }
+  }
+
+  validateCurrentPhoto() {
+    let response = true;
+    if (this.order?.orderMedias?.length > 15) {
+      this.toastr.error("Número máximo de fotos na ordem atingido.");
+      response = false;
+    }
+    if (this.orderMedia.name === null || this.orderMedia.name === undefined || this.orderMedia.name === '') {
+      this.toastr.error("Escolha uma foto.");
+      response = false;
+    }
+
+    return response;
+  }
+
+  private resolveChooseMoment!: (value: any) => void;
+
+  chooseMoment(): Promise<string> {
+    this.showConfirm = true;
+
+    return new Promise(resolve => {
+      this.resolveChooseMoment = resolve;
+    });
+  }
+
+  toggleAccordion(section: 'Checkin' | 'During' | 'Checkout') {
+    this.openedMedia = this.openedMedia === section ? null : section;
+  }
+
+  onChooseMoment(opcao: 0 | null | 1 | 'cancel') {
+    this.showConfirm = false;
+    this.resolveChooseMoment(opcao);
+  }
+
+  get mediasCheckIn() {
+    if(this.order.orderMedias.filter(x => x.moment === 0).length > 0)
+      this.showMediaCheckin = true;
+    else
+      this.showMediaCheckin = false;
+
+    return this.order.orderMedias
+      .filter(x => x.moment === 0)
+  }
+
+  get mediasDuring() {
+    if(this.order.orderMedias.filter(x => x.moment === undefined || x.moment === null).length > 0)
+      this.showMediaDuring = true;
+    else
+      this.showMediaDuring = false;
+
+    return this.order.orderMedias
+      .filter(x => x.moment === undefined || x.moment === null)
+  }
+
+    get mediasCheckout() {
+    if(this.order.orderMedias.filter(x => x.moment === 1).length > 0)
+      this.showMediaCheckout = true;
+    else
+      this.showMediaCheckout = false;
+
+    return this.order.orderMedias
+      .filter(x => x.moment === 1)
+  }
+
+  async savePhotoArray(p: any) {
+    let self = this;
+    //if (this.validateCurrentPhoto()) {
+      const moment = await this.chooseMoment();
+      if (moment != 'cancel') {
+        if (p === 'img') {
+          self.photosUrl.forEach(element => {
+            var orderMedia: any = {};
+            orderMedia.orderUid = self.order.uid;
+            orderMedia.type = p;
+            orderMedia.moment = moment
+            orderMedia.url = element.base64;
+            orderMedia.description = element.description;
+            self.order.orderMedias.unshift(orderMedia);
+          });
+          self.orderMedia = {};
+          self.photosUrl = [ '' ]
+          self.myInputVariable.nativeElement.value = '';
+        }
+        else {
+          self.orderMedia.orderUid = self.order.uid;
+          self.orderMedia.type = p;
+          self.orderMedia.moment = moment
+          self.orderMedia.description = self.docsDescription;
+          self.order.orderMedias.unshift(self.orderMedia);
+          self.orderMedia = {};
+          self.photosUrl = [ '' ]
+          self.myInputVariable.nativeElement.value = '';
+        }
+
+      }
+    //}
+  }
+
+  onRemove(p: any): void {
+    this.removeAction = true;
+    if (confirm("Tem certeza que deseja excluir?")) {
+      const index3 = this.order.orderMedias.indexOf(p, 0);
+      if (index3 > -1) {
+        this.order.orderMedias.splice(index3, 1);
+      }
+    }
+  }
+
+  verifyClient() {
+    this.debt = false
+    if (this.order.clientUid != undefined && this.order.clientUid != null)
+      this.apiClientService.getPath(environment.urls.apiOrder, "invoice/isDue/" + this.order.clientUid).then((data: any[]) => {
+        if (data.length > 0) { this.debt = true }
+      })
+
+  }
+
+  async addSize(event: any): Promise<void> {
+
+    event.orderUid = this.order.uid;
+    if (event.productDiscount == undefined) { event.productDiscount = 0; event.productDiscountPercentual = false; };
+    this.servicess.push(Object.assign({}, event));
+    this.orderProduct;
+
+  }
+
+  status(schedule: boolean = false): void {
+    if (this.order !== null && this.validateCurrent()) {
+      switch (this.order?.status?.toLowerCase()) {
+        case 'orçamento':
+          this.order.status = "Aguardando aprovação";
+          break;
+
+
+        case 'aguardando aprovação':
+          this.order.status = "Aguardando agendamento";
+          break;
+
+        case 'aguardando agendamento':
+          if (!schedule)
+            this.order.bookedDate = new Date();
+          if (!schedule)
+            this.order.status = "Em andamento";
+          else
+            this.order.status = "Agendado";
+          this.book = false;
+          break;
+
+        case 'agendado':
+          this.order.status = "Em andamento";
+          break;
+
+        case 'em andamento':
+          if (confirm("Tem certeza que deseja concluir a ordem?"))
+            this.order.status = "Concluído";
+          else
+            return;
+          break;
+
+        default:
+          this.order.businessUid = localStorage.getItem('ssBusinessUid') || '';
+          this.order.status = "Orçamento";
+          break;
+      }
+      this.order.orderProducts = this.productss.concat(this.servicess).concat(this.productInputs);
+
+      this.order.billing = this.totalp(1) > 0 || this.totalp(2) > 0;
+
+
+      this.apiClientService.save<any>(environment.urls.apiOrder, 'order', this.order, this.callbackSuccess, this.callbackErr);
+    }
+  }
+
+  deny(): void {
+    if (this.order !== null && this.validateCurrent()) {
+      if (confirm("Tem certeza que deseja cancelar a ordem?")) {
+        this.order.status = "Cancelado";
+        this.order.orderProducts = this.productss.concat(this.servicess).concat(this.productInputs);
+        this.apiClientService.save<any>(environment.urls.apiOrder, 'order', this.order, this.callbackSuccess, this.callbackErr);
+      }
+    }
+  }
+
+
+
+  saveInternalCommentary(): void {
+    if (this.order !== null && this.validateCurrent()) {
+      this.order.orderProducts = this.productss.concat(this.servicess).concat(this.productInputs);;
+      this.apiClientService.save<any>(environment.urls.apiOrder, 'order/internalCommentary', this.order, this.callbackSuccessInternalCommentary, this.callbackErr);
+    }
+  }
+
+
+  callbackSuccessInternalCommentary = (resp: any) => {
+    const msg = `Ordem de serviço ` + (this.order.uid !== undefined && this.order.uid !== null ? `alterada` : `criada`) + ` com sucesso!`;
+    this.buttons();
+    this.toastr.success(msg);
+    this.photos();
+  }
+
+  save(): void {
+    if (this.order !== null && this.validateCurrent()) {
+      this.order.orderProducts = this.productss.concat(this.servicess).concat(this.productInputs);
+      this.order.billing = this.totalp(1) > 0 || this.totalp(2) > 0;
+      this.apiClientService.save<any>(environment.urls.apiOrder, 'order', this.order, this.callbackSuccess, this.callbackErr);
+    }
+  }
+
+  callbackSuccess = (resp: any) => {
+    const msg = `Ordem de serviço ` + (this.order.uid !== undefined && this.order.uid !== null ? `alterada` : `criada`) + ` com sucesso!`;
+
+    this.order = resp;
+
+    this.router.navigate(['/order/service/' + resp.uid]);
+
+    this.buttons();
+
+    this.toastr.success(msg);
+
+    this.photos();
+
+    this.router.navigateByUrl(this.router.url)
+
+  }
+
+  callbackErr = (resp: any) => {
+    console.error(resp);
+  }
+
+  delete(p: any): void {
+    this.removeAction = true;
+    if (confirm("Tem certeza que deseja excluir?")) {
+      const index2 = this.servicess.indexOf(p, 0);
+      if (index2 > -1) {
+        this.servicess.splice(index2, 1);
+      }
+
+    }
+  }
+
+
+  validateCurrent() {
+    let response = true;
+
+    if (this.order.type === null || this.order.type === undefined || this.order.type === '') {
+      this.toastr.error("Campo Tipo de OS deve ser preenchido.");
+      response = false;
+    }
+
+    if (this.order.clientUid === null || this.order.clientUid === undefined || this.order.clientUid === '') {
+      this.toastr.error("Campo Cliente deve ser preenchido.");
+      response = false;
+    }
+
+    if ((this.order.plate === null || this.order.plate === undefined || this.order.plate === '')
+      && (this.order.device === null || this.order.device === undefined || this.order.device === '')
+    ) {
+      this.toastr.error("Campo Placa e ou Equipamento deve ser preenchido.");
+      response = false;
+    }
+
+    if (this.order.plate !== null && this.order.plate !== undefined && this.order.plate !== '')
+      if (this.order.startKm === null || this.order.startKm === undefined) {
+        this.toastr.error("KM Inicial deve ser preenchido.");
+        response = false;
+      }
+
+
+    if (this.order.status === 'Agendado') {
+      if (this.order.bookedDate === null || this.order.bookedDate === undefined || this.order.bookedDate === new Date() || this.order.bookedDate.toString() === "") {
+        this.toastr.error("Campo data e hora de agendamento deve ser preenchido.");
+        response = false;
+      }
+    }
+
+    return response;
+
+  }
+
+  totalp(type: number = 0): number {
+    var n = 0;
+    this.totalProducts = 0;
+
+    this.servicess.forEach((s: any) => {
+      if (s.approved) {
+        if (s.productName.toUpperCase() !== 'FRANQUIA SEGURADORA') {
+          if (type === 0)
+            n += this.total(s);
+          else
+            if (type === s.productType)
+              n += this.total(s);
+
+          if (type === 1)
+            this.totalProducts += this.total(s);
+        }
+        else
+          if (this.order.clientUid !== this.order.insurerPersonUid && this.order.orderOutSourcing !== undefined)
+            if (type === 0)
+              n += this.total(s);
+            else
+              if (type === s.productType)
+                n += this.total(s);
+      }
+    });
+
+
+
+    return n;
+  }
+  totalCostp(type: number = 0): number {
+    var n = 0;
+    this.totalProducts = 0;
+
+    this.servicess.forEach((s: any) => {
+      if (s.approved) {
+        if (s.productName.toUpperCase() !== 'FRANQUIA SEGURADORA') {
+          if (type === 0)
+            n += this.totalCost(s);
+          else
+            if (type === s.productType)
+              n += this.totalCost(s);
+
+          if (type === 1)
+            this.totalProducts += this.totalCost(s);
+        }
+        else
+          if (this.order.clientUid !== this.order.insurerPersonUid && this.order.orderOutSourcing !== undefined)
+            if (type === 0)
+              n += this.totalCost(s);
+            else
+              if (type === s.productType)
+                n += this.totalCost(s);
+      }
+    });
+
+
+    return n;
+  }
+
+  totalF(): number {
+    var n = 0;
+    this.servicess.forEach(s => {
+      if (s.productType === 1)
+        n += (s.quantity * s.productDiscount);
+    });
+
+    return n * -1;
+  }
+
+  totalDiscount(): number {
+    var n = 0;
+    this.servicess.forEach(s => {
+      n += this.totalDisc(s);
+    });
+
+    return n;
+  }
+
+  totalDisc(p: any): number {
+
+    var n = 0;
+    if (p.productDiscount > 0) {
+      if (!p.productDiscountPercentual) {
+        n = p.productDiscount * p.quantity;
+      }
+      else {
+        n = p.productPrice * (p.productDiscount / 100) * p.quantity;
+      }
+    };
+    n = Math.round((n + Number.EPSILON) * 100) / 100;
+    return n;
+  }
+
+
+  total(p: any): number {
+
+    var n = p.productPrice * p.quantity + p.shippingValue;
+
+    if (p.productDiscount > 0) {
+
+      if (!p.productDiscountPercentual) {
+        n = parseFloat(((p.productPrice - p.productDiscount) * p.quantity + p.shippingValue).toFixed(2));
+      }
+      else {
+        n = parseFloat(((p.productPrice - (p.productPrice * (p.productDiscount / 100))) * p.quantity + p.shippingValue).toFixed(2));
+      }
+    };
+    // n = Math.round((n + Number.EPSILON) * 100) / 100;
+    return n;
+  }
+
+
+  totalCost(p: any): number {
+
+    var n = p.productPriceCost * p.quantity;
+
+    n = Math.round((n + Number.EPSILON) * 100) / 100;
+    return n;
+  }
+
+  back() { window.history.go(-1); }
+
+
+  changeTechnician(p: any): void {
+
+    if (this.order.status.toUpperCase() === 'CONCLUÍDO') {
+      this.apiClientService.put<any>(environment.urls.apiOrder, 'orderProduct/update', p, this.callbackSuccessTechnician, this.callbackErrMedia);
+    }
+
+    if (p.technicianUid !== undefined) {
+      if (p.productType === 2) {
+        const com = this.technicals.find(x => x.uid == p.technicianUid).comission;
+        if (com > 0)
+          p.comission = this.technicals.find(x => x.uid == p.technicianUid).comission;
+        else
+          p.comission = this.products.find(x => x.uid == p.productUid).comission;
+      }
+    }
+    else
+      p.comission = 0;
+  }
+
+  callbackSuccessTechnician = (resp: any) => {
+  }
+
+
+  openOs(p: number = 0): void {
+
+
+    if (p == 1)
+      if (this.viewCost)
+        if (confirm(`Deseja imprimir o custo?`)) {
+          window.open('order/aprove/' + this.order.uid + '/cost', '_blank');
+          return;
+        }
+
+    window.open('order/aprove/' + this.order.uid, '_blank');
+  }
+
+  openOsTaximeter(p: number = 0): void {
+    window.open('order/taximeter/' + this.order.uid, '_blank');
+  }
+
+  openCategory(p: number = 0): void {
+    window.open('order/aprove-category/' + this.order.uid, '_blank');
+  }
+
+  openCiliaOs(): void {
+    window.open('order/cilia/' + this.order.uid, '_blank');
+  }
+
+  openBilling(): void {
+
+    window.open('finances/billing/' + this.order.uid, '_blank');
+  }
+
+  changeDiscount($event): void {
+    if (this.discountGeneral > 0)
+      this.discountGeneralPrice = 0;
+
+    if (this.typeDiscount === `Ambos`)
+      this.servicess.forEach(element => {
+        element.productDiscountPercentual = true;
+        element.productDiscount = this.discountGeneral
+      });
+    if (this.typeDiscount === `Por Produto`)
+      this.servicess.forEach(element => {
+        if (element.productType === 1) {
+          element.productDiscountPercentual = true;
+          element.productDiscount = this.discountGeneral
+        }
+      });
+    if (this.typeDiscount === `Por Serviço`)
+      this.servicess.forEach(element => {
+        if (element.productType === 2) {
+          element.productDiscountPercentual = true;
+          element.productDiscount = this.discountGeneral
+        }
+      });
+  }
+
+  changeDiscountPrice($event): void {
+
+    if (this.discountGeneralPrice > 0)
+      this.discountGeneral = 0;
+
+    let total: any = 0;
+
+    this.servicess.forEach(element => {
+      if (element.approved) {
+        if (this.typeDiscount === `Ambos`)
+          total += (element.productPrice * element.quantity);
+        if (this.typeDiscount === `Por Produto` && element.productType === 1)
+          total += (element.productPrice * element.quantity);
+        if (this.typeDiscount === `Por Serviço` && element.productType === 2)
+          total += (element.productPrice * element.quantity);
+      }
+    });
+
+    // let _perc = parseFloat((this.discountGeneralPrice / total * 100).toFixed(2));
+    let _perc = this.discountGeneralPrice / total * 100;
+    _perc = Math.round((_perc + Number.EPSILON) * 100) / 100;
+
+    let _totalDiscount = 0;
+    this.servicess.forEach(element => {
+      if (element.approved) {
+        if (this.typeDiscount === `Ambos`) {
+          element.productDiscountPercentual = false
+          element.productDiscount = parseFloat((element.productPrice * (_perc / 100)).toFixed(2));
+          // _totalDiscount += parseFloat((element.productDiscount*element.quantity).toFixed(2));
+          _totalDiscount += parseFloat(((element.productPrice * element.quantity) - (element.productDiscount * element.quantity)).toFixed(2));
+        } else {
+          element.productDiscount = 0;
+        }
+
+        if (this.typeDiscount === `Por Produto` && element.productType === 1) {
+          element.productDiscountPercentual = false
+          element.productDiscount = parseFloat((element.productPrice * (_perc / 100)).toFixed(2));
+          // _totalDiscount += parseFloat((element.productDiscount*element.quantity).toFixed(2));
+          _totalDiscount += parseFloat(((element.productPrice * element.quantity) - (element.productDiscount * element.quantity)).toFixed(2));
+        }
+
+        if (this.typeDiscount === `Por Serviço` && element.productType === 2) {
+          element.productDiscountPercentual = false
+          element.productDiscount = parseFloat((element.productPrice * (_perc / 100)).toFixed(2));
+          // _totalDiscount += parseFloat((element.productDiscount*element.quantity).toFixed(2));
+          _totalDiscount += parseFloat(((element.productPrice * element.quantity) - (element.productDiscount * element.quantity)).toFixed(2));
+        }
+      }
+    });
+
+    _totalDiscount = parseFloat(_totalDiscount.toFixed(2));
+
+    const _totalgeral = (total - this.discountGeneralPrice);
+
+    let i = 0;
+    this.servicess.forEach(element => {
+      if (element.approved) {
+        if (element.quantity === 1 && i === 0) {
+          element.productDiscount += parseFloat(((_totalDiscount - _totalgeral)).toFixed(2));
+          i++;
+        }
+      }
+    });
+
+    // let diff =  Math.round(((_totalDiscount - _totalgeral) + Number.EPSILON) * 100) / 100
+
+    // if (diff == 0.01)
+    //   this.servicess[0].productDiscount += parseFloat(((_totalDiscount - _totalgeral)).toFixed(2));
+    // else
+    //   this.servicess[0].productDiscount += parseFloat(((_totalDiscount - _totalgeral) / this.servicess[0].quantity).toFixed(2));
+
+    // if (_totalDiscount < _totalgeral) {
+    //   console.log(this.discountGeneralPrice)
+    //   console.log(_totalDiscount)
+    //   console.log()
+    //   this.servicess[0].productDiscount += (this.discountGeneralPrice - _totalDiscount);
+    // } else if (_totalDiscount > this.discountGeneralPrice) {
+
+    //   this.servicess[0].productDiscount += (this.discountGeneralPrice - _totalDiscount);
+    // }
+
+  }
+
+  totalGeral(): number {
+    let n = 0;
+
+    this.servicess.forEach(s => {
+      n += this.total(s);
+    });
+
+    return n - this.totalp(1);
+  }
+
+  totalSeg(): number {
+
+    let n = 0;
+
+    this.servicess.forEach(s => {
+      n += this.total(s);
+    });
+
+    return n;
+  }
+
+  totalFran(): number {
+    var n = 0;
+
+    this.servicess.forEach(s => {
+      if (s.productName.toUpperCase() === "FRANQUIA SEGURADORA")
+        n += s.productPrice;
+    });
+    return n * -1;
+  }
+
+  newUser($event) {
+    this.order.clientUid = $event;
+  }
+  repeatTechnician() {
+    if (!this.servicess?.length) return;
+
+    // encontra o primeiro preenchido
+    const firstWithTech = this.servicess.find(s => !!s.technicianUid);
+    if (!firstWithTech) return;
+
+    const tech = firstWithTech.technicianUid;
+
+    // replica para todos os outros
+    this.servicess.forEach(s => {
+      s.technicianUid = tech;
+    });
+  }
+
+
+  exportexcel(): void {
+    /* pass here the table id */
+    let element = document.getElementById(`excel-export`);
+
+    const ws: XLSX.WorkSheet = XLSX.utils.json_to_sheet(this.servicess);
+
+
+    // /* generate workbook and add the worksheet */
+    const wb: XLSX.WorkBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+
+    // /* save to file */  
+    XLSX.writeFile(wb, `${this.order.number}.xlsx`);
+
+  }
+
+  addProductInpust() {
+    this.productInputs.push({
+      productInputs: true,
+      approved: true
+    });
+  }
+
+  deleteProductInpust(s: any) {
+
+    const index = this.productInputs.indexOf(s);
+
+    this.productInputs.splice(index, 1);
+  }
+
+  getPrice(s: any) {
+
+    if (s.productUid != undefined) {
+      s.productPriceCost = this.products.find(x => x.uid === s.productUid).priceCost;
+      s.productName = this.products.find(x => x.uid === s.productUid).name;
+      s.unity = this.products.find(x => x.uid === s.productUid).unity;
+      s.productPrice = 0;
+      s.frequency = 0;
+      s.product = this.products.find(x => x.uid == this.orderProduct.productUid) || {};
+      if (s.quantity === undefined)
+        s.quantity = 1;
+    }
+    else {
+
+    }
+
+
+  }
+
+  getTotalInpust(): number {
+    let total: number = 0;
+    this.productInputs.forEach((element: any) => {
+      if (element.quantity !== undefined && element.productPriceCost !== undefined)
+        total += element.quantity * element.productPriceCost;
+    });
+    return total;
+  }
+
+
+
+
+  handleInputChangeDoc(e: { dataTransfer: { files: any[]; }; target: { files: any[]; }; }): void {
+    const file = e.dataTransfer ? e.dataTransfer.files[0] : e.target.files[0];
+    this.docsDescription = (file.name)
+    const reader = new FileReader();
+    this.docs = true;
+    reader.onload = this._handleReaderLoaded.bind(this);
+    reader.readAsDataURL(file);
+  }
+
+  discountChange(ss: any) {
+
+    var _prod = this.products.find(x => x.uid === ss.productUid);
+
+    // ss.productPriceCost = ss.priceCost || 0;
+    ss.comission = ss.comission || 0;
+    if (ss.productDiscount > 0 && _prod.maxDiscount !== undefined && !this.discountPermission) {
+      var n = 0;
+      if (ss.productDiscountPercentual) {
+        n = ss.productDiscount;
+      }
+      else {
+        n = ((ss.productDiscount * 100) / ss.productPrice);
+      }
+      if (n > _prod.maxDiscount) {
+        this.toastr.warning("Desconto máximo do produto " + _prod.maxDiscount + "%");
+        ss.productDiscount = 0;
+        return;
+      }
+    };
+  }
+
+
+  notApproved(ss: any) {
+    if (!this.edit)
+      return;
+    ss.approved = false;
+    ss.productDiscount = 0;
+  }
+
+  getUrl(p: string): string {
+    return `${environment.urls.cdn}/${this.business.uid}/${p}`;
+  }
+
+  toggleExpand(index: number) {
+    this.expandedRow = this.expandedRow === index ? null : index;
+  }
+
+  getUnity(s: any) {
+    if (s.productUid != undefined) {
+      return this.products.find(x => x.uid === s.productUid).unity;
+    }
+    else {
+      return ``;
+    }
+  }
+
 }
