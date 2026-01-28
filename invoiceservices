@@ -1,172 +1,767 @@
-namespace App.Services.Services
+namespace App.Services.externalApi.talaodenotas.services
 {
     using System;
     using System.Collections.Generic;
-    using System.ComponentModel;
     using System.Linq;
-    using System.Linq.Expressions;
+    using System.Net;
+    using System.Net.Http;
+    using System.Text;
     using System.Threading.Tasks;
-    using App.Services.Commons;
-    using global::AutoMapper;
-    using global::Core.BC.Domain.Entities.checklistConfig;
-    using global::Core.BC.Domain.Entities.checklistConfig.Commands;
-    using global::Core.BC.Domain.Entities.checklistConfig.interfaces;
-    using Interanet.Commons.App.Shared.Base;
-    using Interanet.Commons.Core.Shared.Interfaces;
-    using Interanet.Commons.Core.Shared.Interfaces.Commands;
-    using Interanet.Commons.Core.Shared.Interfaces.Events;
-    using Interanet.Commons.Core.Shared.Messages;
-    using Interanet.Commons.Infra.Repository.Shared.Interfaces;
-    using MediatR;
-    using Microsoft.Extensions.Logging;
+    using App.Services.externalApi.talaodenotas.entities;
+    using global::Core.BC.Domain.Entities.invoice;
+    using global::Core.BC.Domain.Entities.invoiceParcel;
     using Newtonsoft.Json;
+    using Newtonsoft.Json.Linq;
+    using HttpStatusCode = System.Net.HttpStatusCode;
 
-    public class ChecklistConfigServices : GenericServiceAbstract<ChecklistConfigModel>, IchecklistConfigServices
+    public class Services
     {
-        private readonly JsonSerializerSettings settings;
-        private readonly IRepository<ChecklistConfigModel> _repository;
+        public Error Error { get; set; }
 
-        public ChecklistConfigServices(
-           IMapper mapper,
-           IUnitOfWork uow,
-           ILogger<ChecklistConfigModel> logger,
-           IRepository<ChecklistConfigModel> repository,
-           IDomainEventBus bus,
-           INotificationHandler<Notification> notifications,
-           INotificationHandler<CrossMessage> messages)
-           : base(mapper, uow, bus, notifications, messages, logger, repository)
+        public externalApi.talaodenotas.entities.HttpStatusCode TnStatusCode { get; set; }
+
+        public Services()
         {
-            settings = new JsonSerializerSettings
-            {
-                ReferenceLoopHandling = ReferenceLoopHandling.Ignore
-            };
-            _repository = repository;
+            this.TnStatusCode = new entities.HttpStatusCode();
         }
 
-        public override async Task<bool> AssertToCreate(ChecklistConfigModel data)
+        public async Task<List<entities.NatureOperationModel>> GetNatureOperation()
         {
-            logger.LogInformation($"Dado passado para analise: {JsonConvert.SerializeObject(data)}");
-
-            var _t = _repository.Get()
-                .Where(x => x.BusinessUid.Equals(new Guid(user.ipRemote)) && x.removedAt == null
-                && x.Name.ToLower().Equals(data.Name.ToLower()))
-                .ToList();
-
-            if (_t.Count > 0)
+            var httpClient = new HttpClient();
+            try
             {
-                await bus.Raise(Notification.CreateError("Categoria ", "Essa Local ja existe"));
-                return false;
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/natureOperation");
+                var json = await rsp.Content.ReadAsStringAsync();
+                var _rtn = JsonConvert.DeserializeObject<List<entities.NatureOperationModel>>(JObject.Parse(json)["data"].ToString());
+
+                return _rtn;
             }
-
-            data.BusinessUid = new Guid(user.ipRemote);
-
-            return await base.AssertToCreate(data);
-        }
-
-        public async Task<bool> Update(ChecklistConfigModel data)
-        {
-
-            var _t = _repository.Get()
-              .Where(x => !x.BusinessUid.Equals(new Guid(user.ipRemote)) && x.removedAt == null
-              && x.Name.ToLower().Equals(data.Name.ToLower()))
-              .ToList();
-
-            if (_t.Count > 0)
+            catch (Exception ex)
             {
-                await bus.Raise(Notification.CreateError("Categoria ", "Essa Local ja existe"));
-                return false;
+                return null;
             }
-
-            data.updatedAt = DateTime.Now;
-            data.updatedPersonUid = user.personUid;
-            data.IsUpdate = true;
-            data.ToUpdated(user.userName, user.personUid);
-            _repository.Save(data);
-            await _repository.CommitChanges();
-
-            return true;
-
         }
 
-        public Task<ResponsePaginated<List<ChecklistConfigModel>>> Search(ChecklistConfigListCommand cmd)
+        public async Task<List<entities.TaxSpecialModel>> GetTaxSpecial()
         {
-
-            var filter = PredicateExtensions.Begin<ChecklistConfigModel>();
-
-            filter = filter.And(x => x.BusinessUid == this.user.businessUid && x.removedAt == null);
-
-            if (cmd.Description != null && cmd.Description.Length > 0)
+            var httpClient = new HttpClient();
+            try
             {
-                if (PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description).Length > 0)
-                    filter = filter.And(x => x.Name.ToString().Contains(PredicateExtensions.CleanStringOfNonDigits_V1(cmd.Description)) || x.Name.Contains(cmd.Description));
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/taxSpecial");
+                var json = await rsp.Content.ReadAsStringAsync();
+                var _rtn = JsonConvert.DeserializeObject<List<entities.TaxSpecialModel>>(JObject.Parse(json)["data"].ToString());
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<List<entities.CfopModel>> GetCFOP()
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/cfop");
+                var json = await rsp.Content.ReadAsStringAsync();
+                var _rtn = JsonConvert.DeserializeObject<List<entities.CfopModel>>(JObject.Parse(json)["data"].ToString());
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<List<entities.TruckageModel>> GetTruckage()
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/truckage");
+                var json = await rsp.Content.ReadAsStringAsync();
+                var _rtn = JsonConvert.DeserializeObject<List<entities.TruckageModel>>(JObject.Parse(json)["data"].ToString());
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<entities.PersonCertificateModel> SaveCertificate(entities.PersonCertificateModel cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/person/certificate", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<entities.PersonCertificateModel>(json);
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<entities.PersonModel> SavePerson(entities.PersonModel cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/person", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+                var _rtn = JsonConvert.DeserializeObject<entities.PersonModel>(json);
+
+                this.Status(rsp.StatusCode, json);
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<entities.NfeModel> Nfe(entities.NfeModel cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<entities.NfeModel>(json);
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
                 else
-                    filter = filter.And(x => x.Name.Contains(cmd.Description));
+                {
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+                    if (this.Error.Errors != null)
+                    {
+                        if (this.Error.Errors.Title == null)
+                            this.Error.Errors.Title = new List<string>() { "Erro não especificado na api de notas." };
+                        else
+                            this.Error.Errors.Title = new List<string>() { this.Error.Errors.Title.FirstOrDefault() };
+                    }
+                    else
+                        this.Error.Errors = new Errors() { Title = new List<string>() { "Erro não especificado na api de notas." } };
+                }
+
+                return null;
             }
-
-            return List(cmd, filter);
-        }
-
-        public List<ChecklistConfigModel> GetAll()
-        {
-            var _r = this._repository
-                            .Get()
-                            .Where(x => x.removedAt == null && x.businessUid.Value == user.businessParentUid)
-                            .OrderBy(x => x.Name)
-                            .Select(x => new ChecklistConfigModel
-                            {
-                                uid = x.uid,
-                                Name = x.Name,
-                                Question = x.Question,
-                                Checklists = x.Checklists
-                            })
-                            .ToList();
-
-            return _r;
-        }
-
-        public override Task<ResponsePaginated<List<ChecklistConfigModel>>> List(IListCommand cmd, Expression<Func<ChecklistConfigModel, bool>> filter)
-        {
-
-            PropertyDescriptor prop = default;
-
-            if (cmd.ColumnOrder != default)
-                prop = TypeDescriptor.GetProperties(typeof(ChecklistConfigModel)).Find(cmd.ColumnOrder, true);
-
-            if (prop == default)
-                prop = TypeDescriptor.GetProperties(typeof(ChecklistConfigModel)).Find("insertedAt", true);
-
-            if (string.IsNullOrWhiteSpace(cmd.Order) || cmd.Order != "desc" && cmd.Order != "asc")
-                cmd.Order = "desc";
-
-            var query = repository.Get();
-
-            if (filter != default)
-                query = query.Where(filter);
-
-            List<ChecklistConfigModel> data = query.OrderBy(q => q.Name).Take(cmd.PageSize * cmd.Page)
-                .Skip(cmd.Page == 1 ? 0 : cmd.PageSize * (cmd.Page - 1))
-                .ToList();
-
-            int totalRows = query != null ? query.Count() : 0;
-            var paginated = new ResponsePaginated<List<ChecklistConfigModel>>(data ?? new List<ChecklistConfigModel>(), cmd.Page, cmd.PageSize, totalRows);
-
-            return Task.FromResult(paginated);
-
-        }
-
-        public List<ChecklistConfigModel> Parent(ChecklistConfigListCommand cmd)
-        {
-            var _isParent = _repository.Get().Where(x => x.removedAt == null);
-            var _return = new List<ChecklistConfigModel>();
-            if (_isParent.Count() == 0)
+            catch (Exception ex)
             {
-                _return = _repository.Get()
-                    .Where(x => x.removedAt == null && x.uid != cmd.Uid && x.BusinessUid.Equals(new Guid(user.ipRemote)))
-                    .OrderBy(q => q.Name)
-                    .ToList();
+                return null;
             }
-            return _return;
+        }
+
+        public async Task<entities.NfeNumberDisable> NfeNumberDisable(entities.NfeNumberDisable cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfeNumberDisable", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<entities.NfeNumberDisable>(json);
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
+                else
+                {
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+                    if (this.Error.Errors != null)
+                    {
+                        if (this.Error.Errors.Title == null)
+                            this.Error.Errors.Title = new List<string>() { "Erro não especificado na api de notas." };
+                    }
+                    else
+                        this.Error.Errors = new Errors() { Title = new List<string>() { "Erro não especificado na api de notas." } };
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<ReceiptModel> Receipt(ReceiptModel cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/invoicereceipt", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<ReceiptModel>(json);
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
+                else
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<entities.NfseModel> Nfse(entities.NfseModel cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<entities.NfseModel>(json);
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
+                else
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<StatusModel> NfeStatus(Guid cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/status/{cmd}");
+                var json = await rsp.Content.ReadAsStringAsync();
+                var _rtn = JsonConvert.DeserializeObject<StatusModel>(json);
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<StatusModel> NfseStatus(Guid cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/status/{cmd}");
+                var json = await rsp.Content.ReadAsStringAsync();
+                var _rtn = JsonConvert.DeserializeObject<StatusModel>(json);
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<bool> NfseRPS(Guid cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/rps/{cmd}");
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+        }
+
+        public async Task<entities.NfeModel> GetNfeUid(Guid cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/{cmd}");
+                var json = await rsp.Content.ReadAsStringAsync();
+                var _rtn = JsonConvert.DeserializeObject<entities.NfeModel>(json);
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<List<entities.NfseModel>> GetNfSeUid(Guid cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/{cmd}");
+                var json = await rsp.Content.ReadAsStringAsync();
+                var _rtn = JsonConvert.DeserializeObject<List<entities.NfseModel>>(JObject.Parse(json)["data"].ToString());
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<string> ReadXml(entities.File cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/readxml", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return json;
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<bool> NfeEvento(entities.EventoCommand cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfeevent/create", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<bool>(json);
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
+                else
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+        }
+
+        public async Task<bool> NfceEvento(Guid uid)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/eventonfce/" + uid);
+
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<bool>(json);
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
+                else
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+        }
+
+        public async Task<bool> NfseEvento(entities.NfseEventoModel cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/evento", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<bool>(json);
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
+                else
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+        }
+
+        public async Task<NfseEventEntity> NfseEvent(entities.NfseEventEntity cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfseevent", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<bool>(json);
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return JsonConvert.DeserializeObject<entities.NfseEventEntity>(json);
+                else
+                {
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+                    if (this.Error.Errors != null)
+                    {
+                        if (this.Error.Errors.Title == null)
+                            this.Error.Errors.Title = new List<string>() { "Erro não especificado na api de notas." };
+                    }
+                    else
+                        this.Error.Errors = new Errors() { Title = new List<string>() { "Erro não especificado na api de notas." } };
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<entities.NfeModelReturn> NfeSearch(entities.NfeListCommand cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
+                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/search", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<entities.NfeModelReturn>(json);
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<entities.NfseModelReturn> NfseSearch(entities.NfseListCommand cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
+                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfse/search", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<entities.NfseModelReturn>(json);
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<entities.NfeNumberDisableModelReturn> NfeNumberDisableSearch(entities.NfeNumberDisableListCommand cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
+                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfeNumberDisable/search", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<entities.NfeNumberDisableModelReturn>(json);
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        private void Status(HttpStatusCode rsp, string json)
+        {
+            this.TnStatusCode.Code = rsp;
+            if (!(rsp == HttpStatusCode.Created)
+                   && !(rsp == HttpStatusCode.OK))
+                this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+            this.TnStatusCode.Obj = json;
+        }
+
+        public async Task<entities.DfeModelReturn> DfeSearch(entities.DfeListCommand cmd, Guid businessUid)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("businessUid", $"{businessUid}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
+                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/dfe/search", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<entities.DfeModelReturn>(json);
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+
+        }
+
+        public async Task<string> DownloadNfe(entities.DfeListCommand cmd, Guid businessUid)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("businessUid", $"{businessUid}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", cmd.PageSize.ToString());
+                httpClient.DefaultRequestHeaders.Add("page", cmd.Page.ToString());
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfe/download", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                return json;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<bool> ManifestNfe(entities.EventoCommand cmd)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+                httpClient.DefaultRequestHeaders.Add("pageSize", "10000");
+
+                var stringPayload = JsonConvert.SerializeObject(cmd);
+
+                HttpContent httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+                var rsp = await httpClient.PostAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/nfeevent/manifest", httpContent);
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<bool>(json);
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
+                else
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+        }
+
+        public async Task<string> DfeXml(string key)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/dfe/xml/{key}");
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = json;
+
+                if (rsp.StatusCode.Equals(HttpStatusCode.OK) || rsp.StatusCode.Equals(HttpStatusCode.Created))
+                    return _rtn;
+                else
+                    this.Error = JsonConvert.DeserializeObject<entities.Error>(json);
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+
+        public async Task<entities.DfeModelReturn> Dfe(string cnpj)
+        {
+            var httpClient = new HttpClient();
+            try
+            {
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasToken()}");
+
+                var rsp = await httpClient.GetAsync($"{CC.Warmup.Bootstrap.Configuration.GetTalaoDeNotasApi()}/dfe/business/{cnpj}");
+                var json = await rsp.Content.ReadAsStringAsync();
+
+                var _rtn = JsonConvert.DeserializeObject<entities.DfeModelReturn>(json);
+
+                return _rtn;
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
         }
     }
 }
-
